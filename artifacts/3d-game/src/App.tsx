@@ -5,6 +5,12 @@ type Runtime = {
   dispose: () => void;
   restart: () => void;
   drop: () => void;
+  setPaused: (paused: boolean) => void;
+};
+type BlockPlan = {
+  shape: 'box' | 'cylinder';
+  color: number;
+  dimensions: [number, number, number];
 };
 
 const importFromCdn = new Function(
@@ -14,6 +20,24 @@ const importFromCdn = new Function(
 
 const THREE_URL = 'https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js';
 const CANNON_URL = 'https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js';
+const BLOCK_COLORS = [0x75e3c0, 0xf28ab0, 0xf0c46b, 0x79c8dc, 0xb89ae9, 0xff9678];
+
+function makeBlockPlan(): BlockPlan {
+  const color = BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)];
+  if (Math.random() < 0.27) {
+    const radius = 0.68 + Math.random() * 0.12;
+    const height = 0.8 + Math.random() * 0.48;
+    return { shape: 'cylinder', color, dimensions: [radius * 2, height, radius * 2] };
+  }
+  const width = 1.25 + Math.random() * 0.42;
+  const height = 0.72 + Math.random() * 0.5;
+  const depth = 1.2 + Math.random() * 0.42;
+  return { shape: 'box', color, dimensions: [width, height, depth] };
+}
+
+function colorToCss(color: number) {
+  return `#${color.toString(16).padStart(6, '0')}`;
+}
 
 function StackerMark() {
   return (
@@ -48,13 +72,49 @@ function App() {
   const [status, setStatus] = useState<GameStatus>('loading');
   const [score, setScore] = useState(0);
   const [height, setHeight] = useState(0);
+  const [bestHeight, setBestHeight] = useState(() => {
+    try {
+      const saved = Number(window.localStorage.getItem('stacker-best-height'));
+      return Number.isFinite(saved) ? saved : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [nextBlock, setNextBlock] = useState<BlockPlan>(makeBlockPlan);
+  const [dropOffset, setDropOffset] = useState(0);
+  const [previewRotation, setPreviewRotation] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const nextBlockRef = useRef(nextBlock);
+  const controlsRef = useRef({ x: 0, rotation: 0 });
   const [retry, setRetry] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
+  nextBlockRef.current = nextBlock;
 
   const updateStatus = useCallback((next: GameStatus) => {
     statusRef.current = next;
     setStatus(next);
   }, []);
+
+  useEffect(() => {
+    if (height <= bestHeight) return;
+    setBestHeight(height);
+    try {
+      window.localStorage.setItem('stacker-best-height', String(height));
+    } catch {
+      // Keep the current session usable when browser storage is unavailable.
+    }
+  }, [bestHeight, height]);
+
+  const moveDropPosition = (direction: number) => {
+    const nextX = Math.max(-1, Math.min(1, controlsRef.current.x + direction * 0.25));
+    controlsRef.current.x = nextX;
+    setDropOffset(nextX);
+  };
+
+  const rotateNextBlock = () => {
+    controlsRef.current.rotation = (controlsRef.current.rotation + Math.PI / 12) % (Math.PI * 2);
+    setPreviewRotation(controlsRef.current.rotation);
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -79,6 +139,7 @@ function App() {
     let lastFrameTime = 0;
     let cameraTargetY = 0.65;
     let gameOver = false;
+    let paused = false;
     let usingFallback = false;
     let renderCanvas = canvas;
     let fallbackContext: CanvasRenderingContext2D | null = null;
@@ -191,6 +252,14 @@ function App() {
     const restartGame = () => {
       if (!world || !THREE || disposed) return;
       gameOver = false;
+      paused = false;
+      controlsRef.current = { x: 0, rotation: 0 };
+      setDropOffset(0);
+      setPreviewRotation(0);
+      setIsPaused(false);
+      const firstBlock = makeBlockPlan();
+      nextBlockRef.current = firstBlock;
+      setNextBlock(firstBlock);
       buildWorld();
       cameraTargetY = 0.65;
       setScore(0);
@@ -199,10 +268,10 @@ function App() {
     };
 
     const dropPiece = () => {
-      if (!world || !THREE || disposed || gameOver || statusRef.current !== 'ready') return;
-      const roll = Math.random();
-      const hues = [0x75e3c0, 0xf28ab0, 0xf0c46b, 0x79c8dc, 0xb89ae9, 0xff9678];
-      const color = hues[Math.floor(Math.random() * hues.length)];
+      if (!world || !THREE || disposed || gameOver || paused || statusRef.current !== 'ready') return;
+      if (pieces.some((piece) => !piece.counted)) return;
+      const plan = nextBlockRef.current;
+      const color = plan.color;
       const material = sharedBlockMaterial;
       const meshMaterial = new THREE.MeshStandardMaterial({
         color,
@@ -214,22 +283,16 @@ function App() {
       let geometry: any;
       let shape: any;
       let mass = 1.8;
-      let dims: [number, number, number];
+      const dims = plan.dimensions;
 
-      if (roll < 0.27) {
-        const radius = 0.68 + Math.random() * 0.12;
-        const cylinderHeight = 0.8 + Math.random() * 0.48;
-        geometry = new THREE.CylinderGeometry(radius, radius, cylinderHeight, 10, 1);
-        shape = new CANNON.Cylinder(radius, radius, cylinderHeight, 10);
-        dims = [radius * 2, cylinderHeight, radius * 2];
+      if (plan.shape === 'cylinder') {
+        const radius = dims[0] / 2;
+        geometry = new THREE.CylinderGeometry(radius, radius, dims[1], 10, 1);
+        shape = new CANNON.Cylinder(radius, radius, dims[1], 10);
         mass = 1.9;
       } else {
-        const width = 1.25 + Math.random() * 0.42;
-        const blockHeight = 0.72 + Math.random() * 0.5;
-        const depth = 1.2 + Math.random() * 0.42;
-        geometry = new THREE.BoxGeometry(width, blockHeight, depth);
-        shape = new CANNON.Box(new CANNON.Vec3(width / 2, blockHeight / 2, depth / 2));
-        dims = [width, blockHeight, depth];
+        geometry = new THREE.BoxGeometry(...dims);
+        shape = new CANNON.Box(new CANNON.Vec3(dims[0] / 2, dims[1] / 2, dims[2] / 2));
       }
 
       const mesh = new THREE.Mesh(geometry, meshMaterial);
@@ -247,17 +310,23 @@ function App() {
         sleepTimeLimit: 0.55,
       });
       body.addShape(shape);
-      body.position.set((Math.random() - 0.5) * 0.34, Math.max(2.9, cameraTargetY * 2 + 2.7), (Math.random() - 0.5) * 0.34);
+      body.position.set(controlsRef.current.x, Math.max(2.9, cameraTargetY * 2 + 2.7), (Math.random() - 0.5) * 0.18);
       body.quaternion.setFromEuler(
-        (Math.random() - 0.5) * 0.16,
-        (Math.random() - 0.5) * 0.4,
-        (Math.random() - 0.5) * 0.16,
+        (Math.random() - 0.5) * 0.08,
+        controlsRef.current.rotation,
+        (Math.random() - 0.5) * 0.08,
       );
       body.velocity.set((Math.random() - 0.5) * 0.2, 0, (Math.random() - 0.5) * 0.2);
       body.angularVelocity.set((Math.random() - 0.5) * 0.25, (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.25);
       body.userData = { dims };
       world.addBody(body);
-      pieces.push({ body, mesh, kind: roll < 0.27 ? 'cylinder' : 'box', born: animationTime, stillFor: 0, counted: false, color });
+      pieces.push({ body, mesh, kind: plan.shape, born: animationTime, stillFor: 0, counted: false, color });
+      const following = makeBlockPlan();
+      nextBlockRef.current = following;
+      setNextBlock(following);
+      controlsRef.current = { x: 0, rotation: 0 };
+      setDropOffset(0);
+      setPreviewRotation(0);
     };
 
     const gameShell = canvas.closest('.game-shell');
@@ -267,11 +336,25 @@ function App() {
       dropPiece();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== 'Space' || event.repeat) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest('button, input, textarea, select, a, [role="button"]')) return;
-      event.preventDefault();
-      dropPiece();
+      if (event.code === 'Space') {
+        if (event.repeat) return;
+        event.preventDefault();
+        dropPiece();
+        return;
+      }
+      if (statusRef.current !== 'ready' || paused) return;
+      if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
+        event.preventDefault();
+        moveDropPosition(-1);
+      } else if (event.code === 'ArrowRight' || event.code === 'KeyD') {
+        event.preventDefault();
+        moveDropPosition(1);
+      } else if (event.code === 'ArrowUp' || event.code === 'KeyR') {
+        event.preventDefault();
+        rotateNextBlock();
+      }
     };
 
     gameShell?.addEventListener('pointerdown', handleCanvasClick);
@@ -521,7 +604,7 @@ function App() {
           animationTime += delta;
           frameCount += 1;
 
-          if (!gameOver) {
+          if (!gameOver && !paused) {
             world.step(1 / 60, delta, 3);
             let tallest = 0.28;
             let collapsed = false;
@@ -579,6 +662,9 @@ function App() {
           dispose: () => {},
           restart: restartGame,
           drop: dropPiece,
+          setPaused: (value: boolean) => {
+            paused = value;
+          },
         };
         updateStatus('ready');
         rafId = window.requestAnimationFrame(loop);
@@ -643,8 +729,15 @@ function App() {
     runtimeRef.current?.restart();
   };
 
+  const togglePause = () => {
+    if (status !== 'ready') return;
+    const nextPaused = !isPaused;
+    setIsPaused(nextPaused);
+    runtimeRef.current?.setPaused(nextPaused);
+  };
+
   return (
-    <main className={`game-shell ${status === 'loading' ? 'is-loading' : ''} ${status === 'over' ? 'is-over' : ''}`}>
+    <main className={`game-shell ${status === 'loading' ? 'is-loading' : ''} ${status === 'over' ? 'is-over' : ''} ${isPaused ? 'is-paused' : ''}`}>
       <div className="game-canvas-wrap" aria-label="Three-dimensional block stacking game">
         <canvas ref={canvasRef} data-testid="game-canvas" aria-label="Click to drop a physics block" />
         <canvas ref={fallbackCanvasRef} className="fallback-canvas" aria-label="Click to drop a physics block" />
@@ -659,9 +752,25 @@ function App() {
             <div className="brand-subtitle">A physics challenge</div>
           </div>
         </div>
-        <div className="session-badge">
-          <span className="session-dot" />
-          <span>{status === 'over' ? 'Run complete' : status === 'loading' ? 'Connecting' : 'Live session'}</span>
+        <div className="header-actions">
+          <button
+            className="pause-button"
+            onClick={togglePause}
+            disabled={status !== 'ready'}
+            data-testid="button-pause"
+            aria-label={isPaused ? 'Resume game' : 'Pause game'}
+          >
+            {isPaused ? (
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.2 4.6 8 5.4-8 5.4V4.6Z" fill="currentColor" /></svg>
+            ) : (
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M6.5 5v10M13.5 5v10" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
+            )}
+            <span>{isPaused ? 'Resume' : 'Pause'}</span>
+          </button>
+          <div className="session-badge">
+            <span className="session-dot" />
+            <span>{isPaused ? 'Paused' : status === 'over' ? 'Run complete' : status === 'loading' ? 'Connecting' : 'Live session'}</span>
+          </div>
         </div>
       </header>
 
@@ -674,7 +783,51 @@ function App() {
           <span className="height-unit">meters</span>
         </div>
         <div className="hud-caption">Tower height</div>
+        <div className="best-height">
+          <span className="best-height-label">Best height</span>
+          <span className="best-height-value" data-testid="text-best-height">{bestHeight.toFixed(1)}<small>m</small></span>
+        </div>
       </section>
+
+      <aside className="next-panel" aria-label="Next block preview">
+        <div className="next-panel-heading">
+          <div>
+            <div className="next-eyebrow">Up next</div>
+            <div className="next-title">Next Block</div>
+          </div>
+          <span className="next-color-dot" style={{ backgroundColor: colorToCss(nextBlock.color) }} />
+        </div>
+        <div className="next-preview-stage">
+          <div
+            className={`next-preview-shape ${nextBlock.shape === 'cylinder' ? 'is-cylinder' : 'is-cuboid'}`}
+            style={{
+              backgroundColor: colorToCss(nextBlock.color),
+              width: `${Math.max(48, Math.min(72, nextBlock.dimensions[0] * 42))}px`,
+              height: `${Math.max(40, Math.min(58, nextBlock.dimensions[1] * 42))}px`,
+              transform: `rotateX(-22deg) rotateY(${previewRotation + 28}deg) rotateZ(-4deg)`,
+            }}
+          />
+          <div className="preview-shadow" />
+        </div>
+        <div className="next-block-meta">
+          <span>{nextBlock.shape === 'cylinder' ? 'Cylinder' : 'Cuboid'}</span>
+          <span className="next-block-state">Ready</span>
+        </div>
+        <div className="landing-position">
+          <span>Drop position</span>
+          <span>{dropOffset > 0 ? '+' : ''}{dropOffset.toFixed(2)}</span>
+        </div>
+        <div className="position-meter" aria-hidden="true">
+          <span className="position-meter-center" />
+          <span className="position-meter-marker" style={{ left: `${50 + dropOffset * 42}%` }} />
+        </div>
+        <div className="preview-controls">
+          <button onClick={() => moveDropPosition(-1)} aria-label="Move block left" data-testid="button-move-left">←</button>
+          <button onClick={rotateNextBlock} aria-label="Rotate block" data-testid="button-rotate-block">↻</button>
+          <button onClick={() => moveDropPosition(1)} aria-label="Move block right" data-testid="button-move-right">→</button>
+        </div>
+        <div className="next-controls-hint">← → move · ↑ / R rotate</div>
+      </aside>
 
       <footer className="game-bottom">
         <div>
@@ -682,7 +835,7 @@ function App() {
             <span className="keycap">SPACE</span>
             <span data-testid="text-game-instruction">Click to drop blocks</span>
           </div>
-          <div className="prompt-note">One block at a time. Keep your balance.</div>
+          <div className="prompt-note">A / D move · R rotate · One block at a time</div>
         </div>
         <button className="restart-button" onClick={restart} disabled={status === 'loading'} data-testid="button-restart" aria-label="Restart the game">
           <RestartIcon />
@@ -710,6 +863,19 @@ function App() {
             <div className="game-error-detail">{errorMessage}</div>
             <button className="primary-button" onClick={restart} data-testid="button-retry">
               <RestartIcon /> Try again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isPaused && status === 'ready' && (
+        <div className="pause-layer" role="dialog" aria-modal="true" aria-labelledby="paused-title" data-testid="status-paused">
+          <div className="pause-card">
+            <div className="status-kicker">Take your time</div>
+            <h2 id="paused-title">Game paused</h2>
+            <p>The tower is steady. Resume whenever you’re ready.</p>
+            <button className="primary-button" onClick={togglePause} data-testid="button-resume">
+              <ArrowIcon /> Resume building
             </button>
           </div>
         </div>
