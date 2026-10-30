@@ -44,13 +44,11 @@ type ComboPulse = {
   points: number;
 };
 type GraphicsQuality = 'low' | 'medium' | 'high';
-type ControlMode = 'tap' | 'keyboard';
 type CameraDistancePreference = 'close' | 'standard' | 'wide';
 type GameSettings = {
   soundEffects: boolean;
   backgroundMusic: boolean;
   graphicsQuality: GraphicsQuality;
-  controlMode: ControlMode;
   cameraDistance: CameraDistancePreference;
 };
 
@@ -58,7 +56,6 @@ const DEFAULT_SETTINGS: GameSettings = {
   soundEffects: true,
   backgroundMusic: false,
   graphicsQuality: 'high',
-  controlMode: 'tap',
   cameraDistance: 'standard',
 };
 
@@ -73,9 +70,6 @@ function readGameSettings(): GameSettings {
       graphicsQuality: parsed.graphicsQuality === 'low' || parsed.graphicsQuality === 'medium' || parsed.graphicsQuality === 'high'
         ? parsed.graphicsQuality
         : DEFAULT_SETTINGS.graphicsQuality,
-      controlMode: parsed.controlMode === 'keyboard' || parsed.controlMode === 'tap'
-        ? parsed.controlMode
-        : DEFAULT_SETTINGS.controlMode,
       cameraDistance: parsed.cameraDistance === 'close' || parsed.cameraDistance === 'standard' || parsed.cameraDistance === 'wide'
         ? parsed.cameraDistance
         : DEFAULT_SETTINGS.cameraDistance,
@@ -768,37 +762,14 @@ function App() {
     };
 
     const gameShell = canvas.closest('.game-shell');
-    const handleCanvasClick = (event: PointerEvent) => {
+    const handlePrimaryTap = (event: PointerEvent) => {
+      if (!event.isPrimary || event.button !== 0) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest('button, input, textarea, select, a, [role="button"]')) return;
-      if (settingsRef.current.controlMode !== 'tap') return;
       dropPiece();
     };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('button, input, textarea, select, a, [role="button"]')) return;
-      if (event.code === 'Space') {
-        if (settingsRef.current.controlMode !== 'keyboard') return;
-        if (event.repeat) return;
-        event.preventDefault();
-        dropPiece();
-        return;
-      }
-      if (settingsRef.current.controlMode !== 'keyboard' || statusRef.current !== 'ready' || paused) return;
-      if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
-        event.preventDefault();
-        moveDropPosition(-1);
-      } else if (event.code === 'ArrowRight' || event.code === 'KeyD') {
-        event.preventDefault();
-        moveDropPosition(1);
-      } else if (event.code === 'ArrowUp' || event.code === 'KeyR') {
-        event.preventDefault();
-        rotateNextBlock();
-      }
-    };
 
-    gameShell?.addEventListener('pointerdown', handleCanvasClick);
-    window.addEventListener('keydown', handleKeyDown);
+    gameShell?.addEventListener('pointerdown', handlePrimaryTap, { passive: true });
 
     const start = async () => {
       try {
@@ -1372,8 +1343,7 @@ function App() {
       window.cancelAnimationFrame(rafId);
       resizeObserver?.disconnect();
       if (resizeHandler) window.removeEventListener('resize', resizeHandler);
-      gameShell?.removeEventListener('pointerdown', handleCanvasClick);
-      window.removeEventListener('keydown', handleKeyDown);
+      gameShell?.removeEventListener('pointerdown', handlePrimaryTap);
       if (menuExitTimerRef.current !== undefined) window.clearTimeout(menuExitTimerRef.current);
       if (settingsCloseTimerRef.current !== undefined) window.clearTimeout(settingsCloseTimerRef.current);
       if (runtimeRef.current) runtimeRef.current.dispose();
@@ -1516,11 +1486,11 @@ function App() {
 
   const shareScore = async () => {
     if (!finalRunStats) return;
-    const message = `I stacked ${finalRunStats.score} blocks, scored ${finalRunStats.points} points, and reached ${finalRunStats.height.toFixed(1)}m in Stacker. Can you beat it?`;
+    const message = `I stacked ${finalRunStats.score} blocks, scored ${finalRunStats.points} points, and reached ${finalRunStats.height.toFixed(1)}m in Tower Fall 3D. Can you beat it?`;
     try {
       if (navigator.share) {
         try {
-          await navigator.share({ title: 'My Stacker run', text: message });
+          await navigator.share({ title: 'My Tower Fall 3D run', text: message });
           setShareMessage('Score shared');
           return;
         } catch (error) {
@@ -1538,8 +1508,8 @@ function App() {
   return (
     <main className={`game-shell ${status === 'loading' ? 'is-loading' : ''} ${status === 'over' ? 'is-over' : ''} ${isPaused ? 'is-paused' : ''} ${showMenu && !menuExiting ? 'is-menu' : ''}`}>
       <div className="game-canvas-wrap" aria-label="Three-dimensional block stacking game">
-        <canvas ref={canvasRef} data-testid="game-canvas" aria-label="Click to drop a physics block" />
-        <canvas ref={fallbackCanvasRef} className="fallback-canvas" data-testid="game-fallback-canvas" aria-label="Click to drop a physics block" />
+        <canvas ref={canvasRef} data-testid="game-canvas" aria-label="Tap the screen to drop a physics block" />
+        <canvas ref={fallbackCanvasRef} className="fallback-canvas" data-testid="game-fallback-canvas" aria-label="Tap the screen to drop a physics block" />
       </div>
       <div className="game-noise" aria-hidden="true" />
 
@@ -1547,7 +1517,7 @@ function App() {
         <div className="brand-lockup">
           <div className="brand-mark"><StackerMark /></div>
           <div>
-            <div className="brand-name">Stacker</div>
+            <div className="brand-name">Tower Fall 3D</div>
             <div className="brand-subtitle">A physics challenge</div>
           </div>
         </div>
@@ -1663,7 +1633,7 @@ function App() {
             <button onClick={() => moveDropPosition(1)} aria-label="Move block right" data-testid="button-move-right">→</button>
           </div>
           <div className="next-controls-hint">
-            {settings.controlMode === 'keyboard' ? '← → move · ↑ / R rotate' : 'Use buttons to move · rotate'}
+            Use arrows to move · ↻ to rotate
           </div>
         </aside>
       </div>
@@ -1671,11 +1641,10 @@ function App() {
       <footer className="game-bottom">
         <div>
           <div className="drop-prompt">
-            <span className="keycap">SPACE</span>
-            <span data-testid="text-game-instruction">{settings.controlMode === 'tap' ? 'Click to drop blocks' : 'Press SPACE to drop blocks'}</span>
+            <span data-testid="text-game-instruction">Tap anywhere to drop blocks</span>
           </div>
           <div className="prompt-note">
-            {settings.controlMode === 'keyboard' ? 'A / D move · R rotate · One block at a time' : 'Use preview buttons to move · One block at a time'}
+            Use preview buttons to move or rotate · One block at a time
           </div>
         </div>
         <button className="restart-button" onClick={restart} disabled={status === 'loading'} data-testid="button-restart" aria-label="Restart the game">
@@ -1688,7 +1657,7 @@ function App() {
         <div className="status-layer" role="status" aria-live="polite" data-testid="status-loading">
           <div className="status-card">
             <div className="status-kicker">Setting the stage</div>
-            <h1 className="status-title">A tower in<br />the making.</h1>
+            <h1 className="status-title">Tower Fall<br />3D</h1>
             <p className="status-copy">Waking the physics engine and lining up your platform.</p>
             <div className="loading-pips" aria-hidden="true"><span /><span /><span /></div>
           </div>
@@ -1743,7 +1712,7 @@ function App() {
             <div className="collapse-mark" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none"><path d="M12 7v6m0 4h.01M4.9 19h14.2a1.2 1.2 0 0 0 1.04-1.8L13.04 4.8a1.2 1.2 0 0 0-2.08 0L3.86 17.2A1.2 1.2 0 0 0 4.9 19Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </div>
-            <div className="game-over-kicker">The balance shifted</div>
+            <div className="game-over-kicker">Tower Fall 3D · Run complete</div>
             <h1 className="game-over-title" id="game-over-title">TOWER<br />COLLAPSED!</h1>
             <p className="game-over-copy">A new run is one move away. Take your best placement into the next tower.</p>
             <div className="run-stats" aria-label="Final run statistics">
@@ -1787,7 +1756,7 @@ function App() {
       )}
 
       {showMenu && status !== 'error' && (
-        <div className={`home-menu-layer ${menuExiting ? 'is-exiting' : ''}`} aria-label="Stacker home screen" data-testid="status-main-menu">
+        <div className={`home-menu-layer ${menuExiting ? 'is-exiting' : ''}`} aria-label="Tower Fall 3D home screen" data-testid="status-main-menu">
           <div className="home-visual" aria-hidden="true">
             <div className="home-visual-grid" />
             <div className="home-orbit home-orbit-one" />
@@ -1816,7 +1785,7 @@ function App() {
           <section className="home-menu-content">
             <div className="home-menu-mark"><StackerMark /></div>
             <div className="home-menu-eyebrow"><span /> THE PHYSICS STACKING GAME <span /></div>
-            <h1 id="home-menu-title">STACK-A-TOWER<span>: PHYSICS</span></h1>
+            <h1 id="home-menu-title">TOWER FALL <span>3D</span></h1>
             <p className="home-menu-subtitle">The ultimate minimalist stacking challenge.</p>
             <div className="home-menu-actions">
               <button className="home-start-button" onClick={startFromMenu} disabled={status !== 'ready' || menuExiting} data-testid="button-start-game">
@@ -1841,9 +1810,9 @@ function App() {
                     <h2 id="home-detail-title">How to play</h2>
                     <p>Build upward without losing your balance. Every block adds weight and a new challenge.</p>
                     <div className="home-guide-list">
-                      <div><span className="guide-key">CLICK / TAP</span><span>Drop the next block</span></div>
-                      <div><span className="guide-key">← → · A / D</span><span>Adjust its landing position</span></div>
-                      <div><span className="guide-key">↑ · R</span><span>Rotate the next shape</span></div>
+                      <div><span className="guide-key">TAP ANYWHERE</span><span>Drop the next block</span></div>
+                      <div><span className="guide-key">← / →</span><span>Adjust its landing position</span></div>
+                      <div><span className="guide-key">↻ BUTTON</span><span>Rotate the next shape</span></div>
                       <div><span className="guide-key">PAUSE</span><span>Take a break between drops</span></div>
                     </div>
                     <button className="home-modal-primary" onClick={closeHomeModal}>GOT IT</button>
@@ -1872,7 +1841,7 @@ function App() {
                 <svg viewBox="0 0 24 24" fill="none"><path d="M9.6 3h4.8l.6 2.2 1.6.9 2.1-.5 2.4 4.1-1.5 1.7v1.8l1.5 1.7-2.4 4.1-2.1-.5-1.6.9-.6 2.2H9.6L9 19.4l-1.6-.9-2.1.5-2.4-4.1 1.5-1.7v-1.8l-1.5-1.7 2.4-4.1 2.1.5L9 5.2 9.6 3Z" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round"/><circle cx="12" cy="12.3" r="3" stroke="currentColor" strokeWidth="1.35"/></svg>
               </div>
               <div>
-                <div className="settings-eyebrow">STACKER PREFERENCES</div>
+                <div className="settings-eyebrow">TOWER FALL 3D PREFERENCES</div>
                 <h2 id="settings-title">Settings</h2>
               </div>
               <button className="settings-close-icon" onClick={closeSettings} aria-label="Close settings">×</button>
@@ -1943,24 +1912,10 @@ function App() {
             </div>
 
             <div className="settings-section settings-controls-section">
-              <div className="settings-section-title"><span>03</span> CONTROLS</div>
-              <div className="settings-mode-heading">
-                <strong>Control mode</strong>
-                <small>Choose how to place blocks</small>
-              </div>
-              <div className="settings-mode-selector" role="group" aria-label="Control mode">
-                <button
-                  className={settings.controlMode === 'tap' ? 'is-selected' : ''}
-                  onClick={() => updateSettings({ controlMode: 'tap' })}
-                  aria-pressed={settings.controlMode === 'tap'}
-                  data-testid="control-mode-tap"
-                >Tap / Click</button>
-                <button
-                  className={settings.controlMode === 'keyboard' ? 'is-selected' : ''}
-                  onClick={() => updateSettings({ controlMode: 'keyboard' })}
-                  aria-pressed={settings.controlMode === 'keyboard'}
-                  data-testid="control-mode-keyboard"
-                >Keyboard</button>
+              <div className="settings-section-title"><span>03</span> TOUCH CONTROLS</div>
+              <div className="settings-touch-guidance">
+                <strong>Tap anywhere to drop</strong>
+                <small>Use the preview buttons for position and rotation.</small>
               </div>
             </div>
 
