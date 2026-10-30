@@ -45,11 +45,19 @@ type ComboPulse = {
 };
 type GraphicsQuality = 'low' | 'medium' | 'high';
 type CameraDistancePreference = 'close' | 'standard' | 'wide';
+type CameraOrbitSpeed = 'calm' | 'standard' | 'fast';
 type GameSettings = {
   soundEffects: boolean;
   backgroundMusic: boolean;
   graphicsQuality: GraphicsQuality;
   cameraDistance: CameraDistancePreference;
+  cameraOrbitSpeed: CameraOrbitSpeed;
+};
+
+const CAMERA_ORBIT_RATES: Record<CameraOrbitSpeed, number> = {
+  calm: 0.03,
+  standard: 0.055,
+  fast: 0.085,
 };
 
 const DEFAULT_SETTINGS: GameSettings = {
@@ -57,6 +65,7 @@ const DEFAULT_SETTINGS: GameSettings = {
   backgroundMusic: false,
   graphicsQuality: 'high',
   cameraDistance: 'standard',
+  cameraOrbitSpeed: 'standard',
 };
 
 function readGameSettings(): GameSettings {
@@ -73,6 +82,9 @@ function readGameSettings(): GameSettings {
       cameraDistance: parsed.cameraDistance === 'close' || parsed.cameraDistance === 'standard' || parsed.cameraDistance === 'wide'
         ? parsed.cameraDistance
         : DEFAULT_SETTINGS.cameraDistance,
+      cameraOrbitSpeed: parsed.cameraOrbitSpeed === 'calm' || parsed.cameraOrbitSpeed === 'standard' || parsed.cameraOrbitSpeed === 'fast'
+        ? parsed.cameraOrbitSpeed
+        : DEFAULT_SETTINGS.cameraOrbitSpeed,
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -377,6 +389,7 @@ function App() {
     let cameraDistance = initialCameraFrame.distance;
     const cameraElevation = 0.5;
     const cameraOrbitOffset = Math.atan2(9.6, 7.6);
+    let cameraOrbit = 0;
     let gameOver = false;
     let paused = false;
     let usingFallback = false;
@@ -1029,6 +1042,7 @@ function App() {
           const delta = Math.max(0, Math.min(elapsed, 0.05));
           lastFrameTime = timestamp;
           animationTime += delta;
+          cameraOrbit += delta * CAMERA_ORBIT_RATES[settingsRef.current.cameraOrbitSpeed];
           frameCount += 1;
 
           if (!gameOver && !paused) {
@@ -1261,7 +1275,7 @@ function App() {
             cameraTargetY += (frame.targetY - cameraTargetY) * targetAlpha;
             cameraDistance += (frame.distance - cameraDistance) * (1 - Math.exp(-1.25 * delta));
 
-            const orbit = animationTime * 0.055 + cameraOrbitOffset;
+            const orbit = cameraOrbit + cameraOrbitOffset;
             const horizontalRadius = cameraDistance * Math.cos(cameraElevation);
             const cameraHeight = cameraDistance * Math.sin(cameraElevation);
             camera.position.x += (Math.cos(orbit) * horizontalRadius - camera.position.x) * cameraAlpha;
@@ -1909,6 +1923,22 @@ function App() {
                 </label>
               </div>
               <p className="settings-note">Auto-fit pulls back when needed to keep the tower and active block visible.</p>
+              <div className="settings-quality-row settings-camera-row">
+                <div><strong>Camera orbit speed</strong><small>Adjust how quickly the view moves</small></div>
+                <label className="settings-select-wrap">
+                  <select
+                    value={settings.cameraOrbitSpeed}
+                    onChange={(event) => updateSettings({ cameraOrbitSpeed: event.target.value as CameraOrbitSpeed })}
+                    aria-label="Camera orbit speed"
+                    data-testid="select-camera-orbit-speed"
+                  >
+                    <option value="calm">Calm</option>
+                    <option value="standard">Standard</option>
+                    <option value="fast">Fast</option>
+                  </select>
+                  <span aria-hidden="true">⌄</span>
+                </label>
+              </div>
             </div>
 
             <div className="settings-section settings-controls-section">
