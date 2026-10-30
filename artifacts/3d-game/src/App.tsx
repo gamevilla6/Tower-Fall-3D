@@ -6,12 +6,54 @@ type Runtime = {
   restart: () => void;
   drop: () => void;
   setPaused: (paused: boolean) => void;
+  setGraphicsQuality: (quality: GraphicsQuality) => void;
 };
 type BlockPlan = {
   shape: 'box' | 'cylinder';
   color: number;
   dimensions: [number, number, number];
 };
+type RunSummary = {
+  height: number;
+  score: number;
+  bestScore: number;
+  newHighScore: boolean;
+};
+type GraphicsQuality = 'low' | 'medium' | 'high';
+type ControlMode = 'tap' | 'keyboard';
+type GameSettings = {
+  soundEffects: boolean;
+  backgroundMusic: boolean;
+  graphicsQuality: GraphicsQuality;
+  controlMode: ControlMode;
+};
+
+const DEFAULT_SETTINGS: GameSettings = {
+  soundEffects: true,
+  backgroundMusic: false,
+  graphicsQuality: 'high',
+  controlMode: 'tap',
+};
+
+function readGameSettings(): GameSettings {
+  try {
+    const saved = window.localStorage.getItem('stacker-settings');
+    if (!saved) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(saved) as Partial<GameSettings>;
+    return {
+      soundEffects: typeof parsed.soundEffects === 'boolean' ? parsed.soundEffects : DEFAULT_SETTINGS.soundEffects,
+      backgroundMusic: typeof parsed.backgroundMusic === 'boolean' ? parsed.backgroundMusic : DEFAULT_SETTINGS.backgroundMusic,
+      graphicsQuality: parsed.graphicsQuality === 'low' || parsed.graphicsQuality === 'medium' || parsed.graphicsQuality === 'high'
+        ? parsed.graphicsQuality
+        : DEFAULT_SETTINGS.graphicsQuality,
+      controlMode: parsed.controlMode === 'keyboard' || parsed.controlMode === 'tap'
+        ? parsed.controlMode
+        : DEFAULT_SETTINGS.controlMode,
+    };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
 
 const importFromCdn = new Function(
   'url',
@@ -71,6 +113,8 @@ function App() {
   const statusRef = useRef<GameStatus>('loading');
   const [status, setStatus] = useState<GameStatus>('loading');
   const [score, setScore] = useState(0);
+  const scoreRef = useRef(score);
+  scoreRef.current = score;
   const [height, setHeight] = useState(0);
   const [bestHeight, setBestHeight] = useState(() => {
     try {
@@ -80,6 +124,34 @@ function App() {
       return 0;
     }
   });
+  const [bestScore, setBestScore] = useState(() => {
+    try {
+      const saved = Number(window.localStorage.getItem('stacker-best-score'));
+      return Number.isFinite(saved) ? saved : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const bestScoreRef = useRef(bestScore);
+  bestScoreRef.current = bestScore;
+  const [finalRunStats, setFinalRunStats] = useState<RunSummary | null>(null);
+  const [shareMessage, setShareMessage] = useState('');
+  const [showMenu, setShowMenu] = useState(true);
+  const [menuExiting, setMenuExiting] = useState(false);
+  const [howToPlayOpen, setHowToPlayOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
+  const menuExitTimerRef = useRef<number | undefined>(undefined);
+  const isMainMenuRef = useRef(true);
+  const [settings, setSettings] = useState<GameSettings>(readGameSettings);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsClosing, setSettingsClosing] = useState(false);
+  const [settingsReturnTo, setSettingsReturnTo] = useState<'home' | 'pause'>('home');
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const settingsCloseTimerRef = useRef<number | undefined>(undefined);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const musicRef = useRef<{ oscillators: OscillatorNode[]; gain: GainNode } | null>(null);
   const [nextBlock, setNextBlock] = useState<BlockPlan>(makeBlockPlan);
   const [dropOffset, setDropOffset] = useState(0);
   const [previewRotation, setPreviewRotation] = useState(0);
@@ -94,6 +166,85 @@ function App() {
     statusRef.current = next;
     setStatus(next);
   }, []);
+
+  const getAudioContext = () => {
+    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+      audioContextRef.current = new AudioContext();
+    }
+    if (audioContextRef.current.state === 'suspended') void audioContextRef.current.resume();
+    return audioContextRef.current;
+  };
+
+  const playSoundEffect = (kind: 'drop' | 'land') => {
+    if (!settingsRef.current.soundEffects) return;
+    try {
+      const context = getAudioContext();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const now = context.currentTime;
+      oscillator.type = kind === 'drop' ? 'sine' : 'triangle';
+      oscillator.frequency.setValueAtTime(kind === 'drop' ? 420 : 260, now);
+      oscillator.frequency.exponentialRampToValueAtTime(kind === 'drop' ? 170 : 390, now + 0.12);
+      gain.gain.setValueAtTime(kind === 'drop' ? 0.055 : 0.045, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.onended = () => {
+        oscillator.disconnect();
+        gain.disconnect();
+      };
+      oscillator.start(now);
+      oscillator.stop(now + 0.16);
+    } catch {
+      // Audio is optional; unavailable devices should not interrupt gameplay.
+    }
+  };
+
+  const stopBackgroundMusic = () => {
+    const music = musicRef.current;
+    if (!music) return;
+    musicRef.current = null;
+    const now = audioContextRef.current?.currentTime ?? 0;
+    try {
+      music.gain.gain.cancelScheduledValues(now);
+      music.gain.gain.setTargetAtTime(0, now, 0.12);
+      let remaining = music.oscillators.length;
+      for (const oscillator of music.oscillators) {
+        oscillator.onended = () => {
+          oscillator.disconnect();
+          remaining -= 1;
+          if (remaining === 0) music.gain.disconnect();
+        };
+        oscillator.stop(now + 0.5);
+      }
+    } catch {
+      for (const oscillator of music.oscillators) oscillator.disconnect();
+      music.gain.disconnect();
+    }
+  };
+
+  const startBackgroundMusic = () => {
+    if (!settingsRef.current.backgroundMusic) return;
+    if (musicRef.current) return;
+    try {
+      const context = getAudioContext();
+      const gain = context.createGain();
+      gain.gain.setValueAtTime(0, context.currentTime);
+      gain.gain.linearRampToValueAtTime(0.012, context.currentTime + 1.2);
+      gain.connect(context.destination);
+      const oscillators = [110, 164.81, 220].map((frequency) => {
+        const oscillator = context.createOscillator();
+        oscillator.type = 'sine';
+        oscillator.frequency.value = frequency;
+        oscillator.connect(gain);
+        oscillator.start();
+        return oscillator;
+      });
+      musicRef.current = { oscillators, gain };
+    } catch {
+      // Background audio is optional; gameplay remains available if it fails.
+    }
+  };
 
   useEffect(() => {
     if (height <= bestHeight) return;
@@ -159,17 +310,20 @@ function App() {
     updateStatus('loading');
     setErrorMessage('');
 
+    const disposePiece = (piece: Piece) => {
+      if (world) world.removeBody(piece.body);
+      if (scene) scene.remove(piece.mesh);
+      piece.mesh.geometry?.dispose();
+      if (Array.isArray(piece.mesh.material)) {
+        piece.mesh.material.forEach((material: any) => material.dispose());
+      } else {
+        piece.mesh.material?.dispose();
+      }
+    };
+
     const clearPieces = () => {
-      if (!world || !scene) return;
       for (const piece of pieces) {
-        world.removeBody(piece.body);
-        scene.remove(piece.mesh);
-        piece.mesh.geometry?.dispose();
-        if (Array.isArray(piece.mesh.material)) {
-          piece.mesh.material.forEach((material: any) => material.dispose());
-        } else {
-          piece.mesh.material?.dispose();
-        }
+        disposePiece(piece);
       }
       pieces = [];
     };
@@ -249,6 +403,20 @@ function App() {
       scene.add(grid);
     };
 
+    const applyGraphicsQuality = (quality: GraphicsQuality) => {
+      if (!renderer) return;
+      const pixelRatioLimit = quality === 'low' ? 0.75 : quality === 'medium' ? 1.25 : 2;
+      const width = renderCanvas.clientWidth || window.innerWidth;
+      const heightPx = renderCanvas.clientHeight || window.innerHeight;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelRatioLimit));
+      renderer.setSize(width, heightPx, false);
+      if (!usingFallback && renderer.shadowMap && THREE) {
+        renderer.shadowMap.enabled = quality !== 'low';
+        renderer.shadowMap.type = quality === 'high' ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
+        renderer.shadowMap.needsUpdate = true;
+      }
+    };
+
     const restartGame = () => {
       if (!world || !THREE || disposed) return;
       gameOver = false;
@@ -257,19 +425,23 @@ function App() {
       setDropOffset(0);
       setPreviewRotation(0);
       setIsPaused(false);
+      setFinalRunStats(null);
+      setShareMessage('');
       const firstBlock = makeBlockPlan();
       nextBlockRef.current = firstBlock;
       setNextBlock(firstBlock);
       buildWorld();
       cameraTargetY = 0.65;
+      scoreRef.current = 0;
       setScore(0);
       setHeight(0);
       updateStatus('ready');
     };
 
     const dropPiece = () => {
-      if (!world || !THREE || disposed || gameOver || paused || statusRef.current !== 'ready') return;
+      if (!world || !THREE || disposed || gameOver || paused || isMainMenuRef.current || statusRef.current !== 'ready') return;
       if (pieces.some((piece) => !piece.counted)) return;
+      playSoundEffect('drop');
       const plan = nextBlockRef.current;
       const color = plan.color;
       const material = sharedBlockMaterial;
@@ -333,18 +505,20 @@ function App() {
     const handleCanvasClick = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('button, input, textarea, select, a, [role="button"]')) return;
+      if (settingsRef.current.controlMode !== 'tap') return;
       dropPiece();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('button, input, textarea, select, a, [role="button"]')) return;
       if (event.code === 'Space') {
+        if (settingsRef.current.controlMode !== 'keyboard') return;
         if (event.repeat) return;
         event.preventDefault();
         dropPiece();
         return;
       }
-      if (statusRef.current !== 'ready' || paused) return;
+      if (settingsRef.current.controlMode !== 'keyboard' || statusRef.current !== 'ready' || paused) return;
       if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
         event.preventDefault();
         moveDropPosition(-1);
@@ -371,9 +545,16 @@ function App() {
         CANNON = cannonModule;
 
         try {
+          const context = canvas.getContext('webgl2', {
+            antialias: settingsRef.current.graphicsQuality !== 'low',
+            alpha: true,
+            powerPreference: 'high-performance',
+          });
+          if (!context) throw new Error('WebGL2 is unavailable in this browser context.');
           renderer = new THREE.WebGLRenderer({
             canvas,
-            antialias: true,
+            context,
+            antialias: settingsRef.current.graphicsQuality !== 'low',
             alpha: true,
             powerPreference: 'high-performance',
           });
@@ -397,11 +578,8 @@ function App() {
             forceContextLoss: () => {},
           };
         }
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-        renderer.setSize(renderCanvas.clientWidth || window.innerWidth, renderCanvas.clientHeight || window.innerHeight, false);
+        applyGraphicsQuality(settingsRef.current.graphicsQuality);
         if (!usingFallback) {
-          renderer.shadowMap.enabled = true;
-          renderer.shadowMap.type = THREE.PCFSoftShadowMap;
           renderer.outputColorSpace = THREE.SRGBColorSpace;
           renderer.toneMapping = THREE.ACESFilmicToneMapping;
           renderer.toneMappingExposure = 1.22;
@@ -587,7 +765,7 @@ function App() {
           if (!renderer || !camera) return;
           const width = renderCanvas.clientWidth || window.innerWidth;
           const heightPx = renderCanvas.clientHeight || window.innerHeight;
-          renderer.setSize(width, heightPx, false);
+          applyGraphicsQuality(settingsRef.current.graphicsQuality);
           camera.aspect = width / Math.max(heightPx, 1);
           camera.updateProjectionMatrix();
         };
@@ -599,21 +777,58 @@ function App() {
         const loop = (timestamp: number) => {
           if (disposed) return;
           rafId = window.requestAnimationFrame(loop);
-          const delta = lastFrameTime ? Math.min((timestamp - lastFrameTime) / 1000, 0.04) : 1 / 60;
+          const elapsed = lastFrameTime ? (timestamp - lastFrameTime) / 1000 : 1 / 60;
+          const delta = Math.max(0, Math.min(elapsed, 0.05));
           lastFrameTime = timestamp;
           animationTime += delta;
           frameCount += 1;
 
           if (!gameOver && !paused) {
-            world.step(1 / 60, delta, 3);
+            const malformedBeforeStep = pieces.filter((piece) => {
+              const body = piece.body;
+              return ![
+                body.position.x, body.position.y, body.position.z,
+                body.velocity.x, body.velocity.y, body.velocity.z,
+                body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w,
+              ].every(Number.isFinite);
+            });
+            for (const piece of malformedBeforeStep) disposePiece(piece);
+            if (malformedBeforeStep.length) pieces = pieces.filter((piece) => !malformedBeforeStep.includes(piece));
+
+            world.step(1 / 120, delta, 8);
             let tallest = 0.28;
-            let collapsed = false;
+            let collapsed = malformedBeforeStep.length > 0;
+            const removedPieces = new Set<Piece>(malformedBeforeStep);
             for (const piece of pieces) {
               const body = piece.body;
-              piece.mesh.position.set(body.position.x, body.position.y, body.position.z);
-              piece.mesh.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+              const bodyValues = [
+                body.position.x, body.position.y, body.position.z,
+                body.velocity.x, body.velocity.y, body.velocity.z,
+                body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w,
+              ];
+              if (!bodyValues.every(Number.isFinite)) {
+                removedPieces.add(piece);
+                collapsed = true;
+                continue;
+              }
+              if (body.position.y < -10) {
+                removedPieces.add(piece);
+                collapsed = true;
+                continue;
+              }
+              const interpolatedPosition = body.interpolatedPosition;
+              const interpolatedQuaternion = body.interpolatedQuaternion;
+              const renderPosition = interpolatedPosition
+                && [interpolatedPosition.x, interpolatedPosition.y, interpolatedPosition.z].every(Number.isFinite)
+                ? interpolatedPosition
+                : body.position;
+              const renderQuaternion = interpolatedQuaternion
+                && [interpolatedQuaternion.x, interpolatedQuaternion.y, interpolatedQuaternion.z, interpolatedQuaternion.w].every(Number.isFinite)
+                ? interpolatedQuaternion
+                : body.quaternion;
+              piece.mesh.position.set(renderPosition.x, renderPosition.y, renderPosition.z);
+              piece.mesh.quaternion.set(renderQuaternion.x, renderQuaternion.y, renderQuaternion.z, renderQuaternion.w);
               tallest = Math.max(tallest, body.position.y + ((body.userData?.dims?.[1] || 1) / 2));
-              if (body.position.y < -5.5) collapsed = true;
 
               if (!piece.counted) {
                 const linearSpeed = body.velocity.length();
@@ -623,7 +838,9 @@ function App() {
                   if (piece.stillFor > 0.42) {
                     piece.counted = true;
                     body.sleep();
-                    setScore((current) => current + 1);
+                    scoreRef.current += 1;
+                    setScore(scoreRef.current);
+                    playSoundEffect('land');
                   }
                 } else {
                   piece.stillFor = 0;
@@ -632,15 +849,28 @@ function App() {
             }
 
             if (collapsed) {
-              const fallen = pieces.filter((piece) => piece.body.position.y < -5.5);
-              for (const piece of fallen) {
-                world.removeBody(piece.body);
-                scene.remove(piece.mesh);
-                piece.mesh.geometry.dispose();
-                piece.mesh.material.dispose();
+              for (const piece of removedPieces) {
+                if (!malformedBeforeStep.includes(piece)) disposePiece(piece);
               }
-              pieces = pieces.filter((piece) => piece.body.position.y >= -5.5);
+              pieces = pieces.filter((piece) => !removedPieces.has(piece));
               gameOver = true;
+              stopBackgroundMusic();
+              const runScore = scoreRef.current;
+              const runHeight = Math.max(0, Math.round((tallest - 0.28) * 10) / 10);
+              const previousBest = bestScoreRef.current;
+              const newHighScore = runScore > previousBest;
+              const best = Math.max(previousBest, runScore);
+              if (newHighScore) {
+                bestScoreRef.current = best;
+                setBestScore(best);
+                try {
+                  window.localStorage.setItem('stacker-best-score', String(best));
+                } catch {
+                  // The run summary remains available even if browser storage is unavailable.
+                }
+              }
+              setFinalRunStats({ height: runHeight, score: runScore, bestScore: best, newHighScore });
+              setShareMessage('');
               updateStatus('over');
             }
 
@@ -665,6 +895,7 @@ function App() {
           setPaused: (value: boolean) => {
             paused = value;
           },
+          setGraphicsQuality: applyGraphicsQuality,
         };
         updateStatus('ready');
         rafId = window.requestAnimationFrame(loop);
@@ -716,8 +947,15 @@ function App() {
       if (resizeHandler) window.removeEventListener('resize', resizeHandler);
       gameShell?.removeEventListener('pointerdown', handleCanvasClick);
       window.removeEventListener('keydown', handleKeyDown);
+      if (menuExitTimerRef.current !== undefined) window.clearTimeout(menuExitTimerRef.current);
+      if (settingsCloseTimerRef.current !== undefined) window.clearTimeout(settingsCloseTimerRef.current);
       if (runtimeRef.current) runtimeRef.current.dispose();
       runtimeRef.current = null;
+      stopBackgroundMusic();
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
     };
   }, [retry, updateStatus]);
 
@@ -726,7 +964,12 @@ function App() {
       setRetry((value) => value + 1);
       return;
     }
+    isMainMenuRef.current = false;
+    setMenuExiting(false);
+    if (menuExitTimerRef.current !== undefined) window.clearTimeout(menuExitTimerRef.current);
+    setShowMenu(false);
     runtimeRef.current?.restart();
+    startBackgroundMusic();
   };
 
   const togglePause = () => {
@@ -734,10 +977,133 @@ function App() {
     const nextPaused = !isPaused;
     setIsPaused(nextPaused);
     runtimeRef.current?.setPaused(nextPaused);
+    if (nextPaused) stopBackgroundMusic();
+    else startBackgroundMusic();
+  };
+
+  const openSettings = (returnTo: 'home' | 'pause') => {
+    if (settingsCloseTimerRef.current !== undefined) window.clearTimeout(settingsCloseTimerRef.current);
+    setSettingsReturnTo(returnTo);
+    setResetConfirmOpen(false);
+    setSettingsClosing(false);
+    setSettingsOpen(true);
+  };
+
+  const persistSettings = (next: GameSettings) => {
+    try {
+      window.localStorage.setItem('stacker-settings', JSON.stringify(next));
+    } catch {
+      // Settings remain available for this session when browser storage is unavailable.
+    }
+  };
+
+  const updateSettings = (patch: Partial<GameSettings>) => {
+    const next = { ...settingsRef.current, ...patch };
+    settingsRef.current = next;
+    setSettings(next);
+    persistSettings(next);
+    if (patch.graphicsQuality) runtimeRef.current?.setGraphicsQuality(next.graphicsQuality);
+    if (patch.backgroundMusic !== undefined) {
+      if (next.backgroundMusic && statusRef.current !== 'over' && statusRef.current !== 'error' && !isPaused) startBackgroundMusic();
+      else stopBackgroundMusic();
+    }
+  };
+
+  const closeSettings = () => {
+    if (settingsClosing) return;
+    persistSettings(settingsRef.current);
+    setSettingsClosing(true);
+    settingsCloseTimerRef.current = window.setTimeout(() => {
+      setSettingsOpen(false);
+      setSettingsClosing(false);
+      setResetConfirmOpen(false);
+      settingsCloseTimerRef.current = undefined;
+    }, 200);
+  };
+
+  const resetProgress = () => {
+    try {
+      window.localStorage.removeItem('stacker-best-height');
+      window.localStorage.removeItem('stacker-best-score');
+    } catch {
+      // The in-memory records are still cleared if storage is unavailable.
+    }
+    bestScoreRef.current = 0;
+    setBestScore(0);
+    setBestHeight(0);
+    setHeight(0);
+    setScore(0);
+    scoreRef.current = 0;
+    runtimeRef.current?.restart();
+    if (settingsReturnTo === 'pause') {
+      runtimeRef.current?.setPaused(true);
+      setIsPaused(true);
+    }
+    setResetConfirmOpen(false);
+  };
+
+  const openMainMenu = () => {
+    stopBackgroundMusic();
+    runtimeRef.current?.restart();
+    isMainMenuRef.current = true;
+    setMenuExiting(false);
+    setShowMenu(true);
+    startBackgroundMusic();
+  };
+
+  const startFromMenu = () => {
+    if (status !== 'ready' || menuExiting) return;
+    startBackgroundMusic();
+    setMenuExiting(true);
+    setHowToPlayOpen(false);
+    setLeaderboardOpen(false);
+    runtimeRef.current?.restart();
+    menuExitTimerRef.current = window.setTimeout(() => {
+      isMainMenuRef.current = false;
+      setShowMenu(false);
+      setMenuExiting(false);
+      menuExitTimerRef.current = undefined;
+    }, 440);
+  };
+
+  const openHowToPlay = () => {
+    setHowToPlayOpen(true);
+    setLeaderboardOpen(false);
+  };
+
+  const closeHomeModal = () => {
+    setHowToPlayOpen(false);
+    setLeaderboardOpen(false);
+  };
+
+  const openLeaderboard = () => {
+    setLeaderboardOpen(true);
+    setHowToPlayOpen(false);
+  };
+
+  const shareScore = async () => {
+    if (!finalRunStats) return;
+    const message = `I stacked ${finalRunStats.score} blocks and reached ${finalRunStats.height.toFixed(1)}m in Stacker. Can you beat it?`;
+    try {
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: 'My Stacker run', text: message });
+          setShareMessage('Score shared');
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') return;
+        }
+      }
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.');
+      await navigator.clipboard.writeText(message);
+      setShareMessage('Score copied to clipboard');
+    } catch {
+      setShareMessage('Could not share this score from your browser');
+    }
   };
 
   return (
-    <main className={`game-shell ${status === 'loading' ? 'is-loading' : ''} ${status === 'over' ? 'is-over' : ''} ${isPaused ? 'is-paused' : ''}`}>
+    <main className={`game-shell ${status === 'loading' ? 'is-loading' : ''} ${status === 'over' ? 'is-over' : ''} ${isPaused ? 'is-paused' : ''} ${showMenu && !menuExiting ? 'is-menu' : ''}`}>
       <div className="game-canvas-wrap" aria-label="Three-dimensional block stacking game">
         <canvas ref={canvasRef} data-testid="game-canvas" aria-label="Click to drop a physics block" />
         <canvas ref={fallbackCanvasRef} className="fallback-canvas" aria-label="Click to drop a physics block" />
@@ -826,16 +1192,20 @@ function App() {
           <button onClick={rotateNextBlock} aria-label="Rotate block" data-testid="button-rotate-block">↻</button>
           <button onClick={() => moveDropPosition(1)} aria-label="Move block right" data-testid="button-move-right">→</button>
         </div>
-        <div className="next-controls-hint">← → move · ↑ / R rotate</div>
+        <div className="next-controls-hint">
+          {settings.controlMode === 'keyboard' ? '← → move · ↑ / R rotate' : 'Use buttons to move · rotate'}
+        </div>
       </aside>
 
       <footer className="game-bottom">
         <div>
           <div className="drop-prompt">
             <span className="keycap">SPACE</span>
-            <span data-testid="text-game-instruction">Click to drop blocks</span>
+            <span data-testid="text-game-instruction">{settings.controlMode === 'tap' ? 'Click to drop blocks' : 'Press SPACE to drop blocks'}</span>
           </div>
-          <div className="prompt-note">A / D move · R rotate · One block at a time</div>
+          <div className="prompt-note">
+            {settings.controlMode === 'keyboard' ? 'A / D move · R rotate · One block at a time' : 'Use preview buttons to move · One block at a time'}
+          </div>
         </div>
         <button className="restart-button" onClick={restart} disabled={status === 'loading'} data-testid="button-restart" aria-label="Restart the game">
           <RestartIcon />
@@ -877,22 +1247,234 @@ function App() {
             <button className="primary-button" onClick={togglePause} data-testid="button-resume">
               <ArrowIcon /> Resume building
             </button>
+            <button className="pause-settings-button" onClick={() => openSettings('pause')} data-testid="button-pause-settings">
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M8.2 2.6h3.6l.5 1.8 1.3.8 1.8-.4 1.8 3.1-1.3 1.4v1.5l1.3 1.4 1.8 3.1-1.8-.4-1.3.8-.5 1.8H8.2l-.5-1.8-1.3-.8-1.8.4-1.8-3.1 1.3-1.4v-1.5L2.8 8l1.8-3.1 1.8.4 1.3-.8.5-1.9Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><circle cx="10" cy="10.1" r="2.4" stroke="currentColor" strokeWidth="1.2"/></svg>
+              Settings
+            </button>
           </div>
         </div>
       )}
 
       {status === 'over' && (
-        <div className="status-layer" role="dialog" aria-modal="true" aria-labelledby="game-over-title" data-testid="status-game-over">
-          <div className="status-card">
-            <div className="status-kicker">That’s the edge</div>
-            <h1 className="status-title" id="game-over-title">The tower<br />had its moment.</h1>
-            <p className="status-copy">The stack gave way. Take what you learned into the next run.</p>
-            <div className="status-score" data-testid="text-final-score">{score}</div>
-            <div className="status-score-caption">blocks placed</div>
-            <button className="primary-button" onClick={restart} data-testid="button-play-again">
-              <ArrowIcon /> Build again
-            </button>
+        <div className="status-layer game-over-layer" role="dialog" aria-modal="true" aria-labelledby="game-over-title" data-testid="status-game-over">
+          <section className="game-over-card">
+            <div className="collapse-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 7v6m0 4h.01M4.9 19h14.2a1.2 1.2 0 0 0 1.04-1.8L13.04 4.8a1.2 1.2 0 0 0-2.08 0L3.86 17.2A1.2 1.2 0 0 0 4.9 19Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </div>
+            <div className="game-over-kicker">The balance shifted</div>
+            <h1 className="game-over-title" id="game-over-title">TOWER<br />COLLAPSED!</h1>
+            <p className="game-over-copy">A new run is one move away. Take your best placement into the next tower.</p>
+            <div className="run-stats" aria-label="Final run statistics">
+              <div className="run-stat-row">
+                <span>Final height reached</span>
+                <strong data-testid="text-final-height">{(finalRunStats?.height ?? height).toFixed(1)}<small>m</small></strong>
+              </div>
+              <div className="run-stat-row">
+                <span>Total blocks stacked</span>
+                <strong data-testid="text-final-score">{finalRunStats?.score ?? score}</strong>
+              </div>
+              <div className="run-stat-row best-stat-row">
+                <span>Personal best</span>
+                <strong data-testid="text-high-score">{finalRunStats?.bestScore ?? bestScore}</strong>
+                {finalRunStats?.newHighScore && <span className="new-record-badge" data-testid="badge-new-high-score">NEW HIGH SCORE</span>}
+              </div>
+            </div>
+            <div className="game-over-actions">
+              <button className="retry-button" onClick={restart} data-testid="button-play-again">
+                <RestartIcon /> TRY AGAIN
+              </button>
+              <div className="secondary-actions">
+                <button className="menu-action-button" onClick={openMainMenu} data-testid="button-main-menu">MAIN MENU</button>
+                <button className="share-action-button" onClick={shareScore} data-testid="button-share-score">
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M12.5 6.1 7.7 8.7m4.8 5.2-4.8-2.6M15 5.5a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6ZM5 11.8a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6Zm10 5.5a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  SHARE SCORE
+                </button>
+              </div>
+              {shareMessage && <p className="share-feedback" role="status" data-testid="text-share-feedback">{shareMessage}</p>}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {showMenu && status !== 'error' && (
+        <div className={`home-menu-layer ${menuExiting ? 'is-exiting' : ''}`} aria-label="Stacker home screen" data-testid="status-main-menu">
+          <div className="home-visual" aria-hidden="true">
+            <div className="home-visual-grid" />
+            <div className="home-orbit home-orbit-one" />
+            <div className="home-orbit home-orbit-two" />
+            <div className="home-tower-stage">
+              <div className="home-tower-stack">
+                <div className="tower-slice slice-one" />
+                <div className="tower-slice slice-two" />
+                <div className="tower-slice slice-three" />
+                <div className="tower-slice slice-four" />
+                <div className="tower-slice slice-five" />
+                <div className="tower-slice slice-six" />
+                <div className="tower-slice slice-seven" />
+              </div>
+              <div className="home-tower-shadow" />
+            </div>
           </div>
+          <button className="home-leaderboard-link" onClick={openLeaderboard} data-testid="button-leaderboard">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 16V9m6 7V4m6 12v-5M2 16.5h16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            <span>LEADERBOARD</span>
+          </button>
+          <button className="home-settings-link" onClick={() => openSettings('home')} data-testid="button-home-settings">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M8.2 2.6h3.6l.5 1.8 1.3.8 1.8-.4 1.8 3.1-1.3 1.4v1.5l1.3 1.4-1.8 3.1-1.8-.4-1.3.8-.5 1.8H8.2l-.5-1.8-1.3-.8-1.8.4-1.8-3.1 1.3-1.4v-1.5L2.8 8l1.8-3.1 1.8.4 1.3-.8.5-1.9Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><circle cx="10" cy="10.1" r="2.4" stroke="currentColor" strokeWidth="1.2"/></svg>
+            <span>SETTINGS</span>
+          </button>
+          <section className="home-menu-content">
+            <div className="home-menu-mark"><StackerMark /></div>
+            <div className="home-menu-eyebrow"><span /> THE PHYSICS STACKING GAME <span /></div>
+            <h1 id="home-menu-title">STACK-A-TOWER<span>: PHYSICS</span></h1>
+            <p className="home-menu-subtitle">The ultimate minimalist stacking challenge.</p>
+            <div className="home-menu-actions">
+              <button className="home-start-button" onClick={startFromMenu} disabled={status !== 'ready' || menuExiting} data-testid="button-start-game">
+                <span>{status === 'ready' ? 'START GAME' : 'LOADING GAME'}</span>
+                <ArrowIcon />
+              </button>
+              <button className="home-howto-button" onClick={openHowToPlay} disabled={menuExiting} data-testid="button-how-to-play">HOW TO PLAY</button>
+            </div>
+            <div className="home-begin-hint">
+              <span className="home-pulse-dot" />
+              <span>{status === 'ready' ? 'TAP TO BEGIN' : 'SETTING UP THE PHYSICS'}</span>
+            </div>
+            <div className="home-record-note">PERSONAL BEST <strong>{bestScore}</strong> BLOCKS</div>
+          </section>
+          {(howToPlayOpen || leaderboardOpen) && (
+            <div className="home-detail-layer" onClick={closeHomeModal}>
+              <section className="home-detail-card" role="dialog" aria-modal="true" aria-labelledby="home-detail-title" onClick={(event) => event.stopPropagation()}>
+                <button className="home-modal-close" onClick={closeHomeModal} aria-label="Close dialog">×</button>
+                {howToPlayOpen ? (
+                  <>
+                    <div className="home-detail-eyebrow">QUICK GUIDE</div>
+                    <h2 id="home-detail-title">How to play</h2>
+                    <p>Build upward without losing your balance. Every block adds weight and a new challenge.</p>
+                    <div className="home-guide-list">
+                      <div><span className="guide-key">CLICK / TAP</span><span>Drop the next block</span></div>
+                      <div><span className="guide-key">← → · A / D</span><span>Adjust its landing position</span></div>
+                      <div><span className="guide-key">↑ · R</span><span>Rotate the next shape</span></div>
+                      <div><span className="guide-key">PAUSE</span><span>Take a break between drops</span></div>
+                    </div>
+                    <button className="home-modal-primary" onClick={closeHomeModal}>GOT IT</button>
+                  </>
+                ) : (
+                  <>
+                    <div className="home-detail-eyebrow">THIS DEVICE</div>
+                    <h2 id="home-detail-title">Leaderboard</h2>
+                    <p>Your best run, saved locally in this browser.</p>
+                    <div className="home-leader-row"><span><b>01</b> YOUR PERSONAL BEST</span><strong>{bestScore}<small> blocks</small></strong></div>
+                    <div className="home-leader-row"><span><b>↗</b> BEST TOWER HEIGHT</span><strong>{bestHeight.toFixed(1)}<small> m</small></strong></div>
+                    <button className="home-modal-primary" onClick={closeHomeModal}>CLOSE</button>
+                  </>
+                )}
+              </section>
+            </div>
+          )}
+        </div>
+      )}
+
+      {settingsOpen && (
+        <div className={`settings-backdrop ${settingsClosing ? 'is-closing' : ''}`} role="presentation" onClick={closeSettings} data-testid="settings-backdrop">
+          <section className="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}>
+            <header className="settings-header">
+              <div className="settings-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M9.6 3h4.8l.6 2.2 1.6.9 2.1-.5 2.4 4.1-1.5 1.7v1.8l1.5 1.7-2.4 4.1-2.1-.5-1.6.9-.6 2.2H9.6L9 19.4l-1.6-.9-2.1.5-2.4-4.1 1.5-1.7v-1.8l-1.5-1.7 2.4-4.1 2.1.5L9 5.2 9.6 3Z" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round"/><circle cx="12" cy="12.3" r="3" stroke="currentColor" strokeWidth="1.35"/></svg>
+              </div>
+              <div>
+                <div className="settings-eyebrow">STACKER PREFERENCES</div>
+                <h2 id="settings-title">Settings</h2>
+              </div>
+              <button className="settings-close-icon" onClick={closeSettings} aria-label="Close settings">×</button>
+            </header>
+
+            <div className="settings-section">
+              <div className="settings-section-title"><span>01</span> AUDIO</div>
+              <div className="settings-row">
+                <div><strong>Sound effects</strong><small>Block drops and landings</small></div>
+                <button
+                  className={`settings-switch ${settings.soundEffects ? 'is-on' : ''}`}
+                  role="switch"
+                  aria-checked={settings.soundEffects}
+                  aria-label="Sound effects"
+                  onClick={() => updateSettings({ soundEffects: !settings.soundEffects })}
+                  data-testid="toggle-sfx"
+                ><span /></button>
+              </div>
+              <div className="settings-row">
+                <div><strong>Background music</strong><small>Soft ambient game tone</small></div>
+                <button
+                  className={`settings-switch ${settings.backgroundMusic ? 'is-on' : ''}`}
+                  role="switch"
+                  aria-checked={settings.backgroundMusic}
+                  aria-label="Background music"
+                  onClick={() => updateSettings({ backgroundMusic: !settings.backgroundMusic })}
+                  data-testid="toggle-music"
+                ><span /></button>
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title"><span>02</span> GRAPHICS</div>
+              <div className="settings-quality-row">
+                <div><strong>Graphics quality</strong><small>Balance detail and performance</small></div>
+                <label className="settings-select-wrap">
+                  <select
+                    value={settings.graphicsQuality}
+                    onChange={(event) => updateSettings({ graphicsQuality: event.target.value as GraphicsQuality })}
+                    aria-label="Graphics quality"
+                    data-testid="select-graphics-quality"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                  <span aria-hidden="true">⌄</span>
+                </label>
+              </div>
+              <p className="settings-note">Shadows and render scale update now. Anti-aliasing uses this choice after the next page load.</p>
+            </div>
+
+            <div className="settings-section settings-controls-section">
+              <div className="settings-section-title"><span>03</span> CONTROLS</div>
+              <div className="settings-mode-heading">
+                <strong>Control mode</strong>
+                <small>Choose how to place blocks</small>
+              </div>
+              <div className="settings-mode-selector" role="group" aria-label="Control mode">
+                <button
+                  className={settings.controlMode === 'tap' ? 'is-selected' : ''}
+                  onClick={() => updateSettings({ controlMode: 'tap' })}
+                  aria-pressed={settings.controlMode === 'tap'}
+                  data-testid="control-mode-tap"
+                >Tap / Click</button>
+                <button
+                  className={settings.controlMode === 'keyboard' ? 'is-selected' : ''}
+                  onClick={() => updateSettings({ controlMode: 'keyboard' })}
+                  aria-pressed={settings.controlMode === 'keyboard'}
+                  data-testid="control-mode-keyboard"
+                >Keyboard</button>
+              </div>
+            </div>
+
+            {resetConfirmOpen ? (
+              <div className="reset-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="reset-confirm-title">
+                <strong id="reset-confirm-title">Clear saved progress?</strong>
+                <p>This removes the saved best score and height and restarts the current tower. Your settings stay unchanged.</p>
+                <div>
+                  <button className="reset-cancel-button" onClick={() => setResetConfirmOpen(false)}>KEEP PROGRESS</button>
+                  <button className="reset-confirm-button" onClick={resetProgress} data-testid="button-confirm-reset">CLEAR PROGRESS</button>
+                </div>
+              </div>
+            ) : (
+              <div className="settings-footer">
+                <button className="reset-progress-button" onClick={() => setResetConfirmOpen(true)} data-testid="button-reset-progress">Reset progress</button>
+                <button className="settings-save-button" onClick={closeSettings} data-testid="button-save-settings">
+                  {settingsReturnTo === 'pause' ? 'BACK TO PAUSE' : 'SAVE & CLOSE'}
+                </button>
+              </div>
+            )}
+          </section>
         </div>
       )}
     </main>
