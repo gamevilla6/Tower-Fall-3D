@@ -308,6 +308,9 @@ function App() {
     let frameCount = 0;
     let lastFrameTime = 0;
     let cameraTargetY = 0.65;
+    let cameraDistance = 14;
+    const cameraElevation = 0.5;
+    const cameraOrbitOffset = Math.atan2(9.6, 7.6);
     let gameOver = false;
     let paused = false;
     let usingFallback = false;
@@ -568,6 +571,7 @@ function App() {
       previewPlanUpdaterRef.current?.(firstBlock);
       buildWorld();
       cameraTargetY = 0.65;
+      cameraDistance = 14;
       scoreRef.current = 0;
       setScore(0);
       setHeight(0);
@@ -581,6 +585,11 @@ function App() {
       const plan = nextBlockRef.current;
       const color = plan.color;
       const material = sharedBlockMaterial;
+      const settledTowerTop = pieces.reduce((top, piece) => {
+        const halfHeight = (piece.body.userData?.dims?.[1] || 1) / 2;
+        const pieceTop = piece.body.position.y + halfHeight;
+        return Number.isFinite(pieceTop) ? Math.max(top, pieceTop) : top;
+      }, 0.28);
       const meshMaterial = new THREE.MeshStandardMaterial({
         color,
         roughness: 0.27,
@@ -616,7 +625,7 @@ function App() {
         sleepTimeLimit: 0.55,
       });
       body.addShape(shape);
-      body.position.set(controlsRef.current.x, Math.max(2.9, cameraTargetY * 2 + 2.7), (Math.random() - 0.5) * 0.18);
+      body.position.set(controlsRef.current.x, Math.max(2.9, settledTowerTop + 2.7), (Math.random() - 0.5) * 0.18);
       body.quaternion.setFromEuler(
         (Math.random() - 0.5) * 0.08,
         controlsRef.current.rotation,
@@ -724,7 +733,7 @@ function App() {
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0x151b24);
         scene.fog = new THREE.FogExp2(0x151b24, 0.019);
-        camera = new THREE.PerspectiveCamera(36, 1, 0.1, 180);
+        camera = new THREE.PerspectiveCamera(36, 1, 0.1, 1000);
         camera.position.set(7.6, 7.2, 9.6);
         camera.lookAt(0, 0.5, 0);
 
@@ -771,7 +780,7 @@ function App() {
             };
             const dot = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => a.x * b.x + a.y * b.y + a.z * b.z;
             const direction = normalize({ x: target.x - eye.x, y: target.y - eye.y, z: target.z - eye.z });
-            const right = normalize({ x: direction.z, y: 0, z: -direction.x });
+            const right = normalize({ x: -direction.z, y: 0, z: direction.x });
             const up = normalize({
               x: right.y * direction.z - right.z * direction.y,
               y: right.z * direction.x - right.x * direction.z,
@@ -933,6 +942,8 @@ function App() {
 
             world.step(1 / 120, delta, 8);
             let tallest = 0.28;
+            let settledTowerTop = 0.28;
+            let activeBlockTop = 0.28;
             let collapsed = malformedBeforeStep.length > 0;
             const removedPieces = new Set<Piece>(malformedBeforeStep);
             for (const piece of pieces) {
@@ -964,7 +975,10 @@ function App() {
                 : body.quaternion;
               piece.mesh.position.set(renderPosition.x, renderPosition.y, renderPosition.z);
               piece.mesh.quaternion.set(renderQuaternion.x, renderQuaternion.y, renderQuaternion.z, renderQuaternion.w);
-              tallest = Math.max(tallest, body.position.y + ((body.userData?.dims?.[1] || 1) / 2));
+              const pieceTop = body.position.y + ((body.userData?.dims?.[1] || 1) / 2);
+              tallest = Math.max(tallest, pieceTop);
+              if (piece.counted) settledTowerTop = Math.max(settledTowerTop, pieceTop);
+              else activeBlockTop = Math.max(activeBlockTop, pieceTop);
 
               if (!piece.counted) {
                 const linearSpeed = body.velocity.length();
@@ -1010,13 +1024,30 @@ function App() {
               updateStatus('over');
             }
 
-            const desiredTarget = Math.max(0.65, tallest * 0.42);
-            cameraTargetY += (desiredTarget - cameraTargetY) * Math.min(1, delta * 1.7);
-            const orbit = animationTime * 0.055;
-            const cameraRadius = 12.3;
-            camera.position.x += (Math.cos(orbit) * cameraRadius - camera.position.x) * 0.012;
-            camera.position.z += (Math.sin(orbit) * cameraRadius - camera.position.z) * 0.012;
-            camera.position.y += (cameraTargetY + 6.8 - camera.position.y) * Math.min(1, delta * 1.4);
+            const framedTop = Math.max(activeBlockTop, settledTowerTop + 3.5);
+            const trackedTop = Math.max(activeBlockTop, settledTowerTop);
+            const desiredTarget = Math.max(0.65, (0.28 + trackedTop) / 2);
+            const targetAlpha = 1 - Math.exp(-1.8 * delta);
+            const cameraAlpha = 1 - Math.exp(-1.55 * delta);
+            cameraTargetY += (desiredTarget - cameraTargetY) * targetAlpha;
+
+            const frameFill = 0.76;
+            const verticalSpan = Math.max(5.2, framedTop - 0.28 + 1);
+            const halfFovTangent = Math.tan((camera.fov * Math.PI) / 360);
+            const aspect = Math.max(camera.aspect || 1, 0.38);
+            const verticalFitDistance = (verticalSpan * Math.cos(cameraElevation)) / (2 * halfFovTangent * frameFill);
+            const platformWidth = 5.4;
+            const horizontalFitDistance = platformWidth / (2 * halfFovTangent * aspect * frameFill);
+            const desiredDistance = Math.max(14, verticalFitDistance, horizontalFitDistance);
+            cameraDistance += (desiredDistance - cameraDistance) * (1 - Math.exp(-1.25 * delta));
+
+            const orbit = animationTime * 0.055 + cameraOrbitOffset;
+            const horizontalRadius = cameraDistance * Math.cos(cameraElevation);
+            const cameraHeight = cameraDistance * Math.sin(cameraElevation);
+            camera.position.x += (Math.cos(orbit) * horizontalRadius - camera.position.x) * cameraAlpha;
+            camera.position.z += (Math.sin(orbit) * horizontalRadius - camera.position.z) * cameraAlpha;
+            camera.position.y += (cameraTargetY + cameraHeight - camera.position.y) * cameraAlpha;
+            if (scene.fog) scene.fog.density = Math.max(0.004, 0.019 * (14 / cameraDistance));
             camera.lookAt(0, cameraTargetY, 0);
 
             if (frameCount % 8 === 0) setHeight(Math.max(0, tallest - 0.28));

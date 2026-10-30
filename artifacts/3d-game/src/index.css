@@ -1116,7 +1116,7 @@
   .pause-button { min-height: 33px; gap: 5px; padding: 0 9px; font-size: 10px; }
   .session-badge { gap: 6px; padding: 8px; font-size: 8px; }
   .hud-rail { top: 83px; left: 16px; right: 16px; gap: 10px; }
-  .hud { width: min(150px, calc(100% - 168px)); transform: translateY(-22px); }
+  .hud { width: min(112px, calc(100% - 142px)); transform: translateY(-22px); }
   .hud-label { font-size: 8px; }
   .score-value { margin: 4px 0 7px; font-size: clamp(32px, 9vw, 40px); }
   .hud-divider { margin-bottom: 6px; }
@@ -1125,9 +1125,9 @@
   .hud-caption { display: none; }
   .best-height { width: 100%; margin-top: 7px; padding-top: 6px; }
   .best-height-label { font-size: 7px; }
-  .next-panel { flex-basis: 158px; width: 158px; padding: 12px; border-radius: 14px; }
+  .next-panel { flex-basis: 132px; width: 132px; padding: 10px; border-radius: 14px; }
   .next-title { font-size: 14px; }
-  .next-preview-stage { height: 92px; margin: 9px -2px 7px; }
+  .next-preview-stage { height: 84px; margin: 8px -2px 6px; }
   .next-controls-hint { font-size: 7px; }
   .game-bottom { right: 18px; bottom: 18px; left: 18px; align-items: center; }
   .drop-prompt { gap: 10px; font-size: 13px; }
@@ -1189,17 +1189,18 @@
 }
 @media (max-width: 360px) {
   .hud-rail { top: 78px; left: 12px; right: 12px; }
-  .hud { transform: translateY(-18px); }
+  .hud { width: min(94px, calc(100% - 130px)); transform: translateY(-18px); }
   .score-value { margin: 3px 0 4px; font-size: 32px; }
   .hud-divider { margin-bottom: 4px; }
   .height-value { font-size: 13px; }
   .height-unit { font-size: 7px; }
   .best-height { display: none; }
-  .next-panel { flex-basis: 140px; width: 140px; padding: 10px; }
-  .next-preview-stage { height: 78px; margin: 6px -2px 5px; }
+  .next-panel { flex-basis: 112px; width: 112px; padding: 8px; }
+  .next-preview-stage { height: 70px; margin: 6px -2px 5px; }
   .next-title { font-size: 12px; }
   .landing-position { margin-top: 8px; font-size: 8px; }
-  .preview-controls button { height: 26px; }
+  .preview-controls { gap: 4px; margin-top: 4px; }
+  .preview-controls button { height: 24px; font-size: 15px; }
   .next-controls-hint { display: none; }
 }
 @media (max-height: 650px) and (min-width: 701px) {

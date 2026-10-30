@@ -1,1 +1,2 @@
 - [3D preview without WebGL](3d-preview-without-webgl.md) — keep physics-backed games usable when an embedded preview cannot create a WebGL context.
+- [Camera framing and spawn height](camera-framing-and-spawn-height.md) — keep block spawn height independent from camera aim to prevent a feedback loop.
