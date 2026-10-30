@@ -973,7 +973,12 @@ function App() {
               });
             };
 
-            addBoxFaces({ x: 0, y: 0, z: 0 }, [3.8, 0.56, 3.8], { x: 0, y: 0, z: 0, w: 1 }, 0x435b63);
+            addBoxFaces(
+              { x: 0, y: 0, z: 0 },
+              [platformHalfExtent * 2, 0.56, platformHalfExtent * 2],
+              { x: 0, y: 0, z: 0, w: 1 },
+              0x435b63,
+            );
             for (const piece of pieces) {
               const dims = piece.body.userData?.dims || [1.4, 1, 1.4];
               if (piece.kind === 'box') {
@@ -1448,6 +1453,11 @@ function App() {
     setHeight(0);
     setScore(0);
     scoreRef.current = 0;
+    setPoints(0);
+    pointsRef.current = 0;
+    setStreak(0);
+    streakRef.current = 0;
+    setComboPulse(null);
     runtimeRef.current?.restart();
     if (settingsReturnTo === 'pause') {
       runtimeRef.current?.setPaused(true);
@@ -1497,7 +1507,7 @@ function App() {
 
   const shareScore = async () => {
     if (!finalRunStats) return;
-    const message = `I stacked ${finalRunStats.score} blocks and reached ${finalRunStats.height.toFixed(1)}m in Stacker. Can you beat it?`;
+    const message = `I stacked ${finalRunStats.score} blocks, scored ${finalRunStats.points} points, and reached ${finalRunStats.height.toFixed(1)}m in Stacker. Can you beat it?`;
     try {
       if (navigator.share) {
         try {
@@ -1564,17 +1574,42 @@ function App() {
             <span className="height-unit">meters</span>
           </div>
           <div className="hud-caption">Tower height</div>
+          <div className="bonus-readout" aria-label="Points and streak">
+            <div className="bonus-readout-row">
+              <span>Points</span>
+              <strong data-testid="text-points">{points.toLocaleString()}</strong>
+            </div>
+            <div className="bonus-readout-row">
+              <span>Streak</span>
+              <strong data-testid="text-streak">{streak} <small>×{getStreakMultiplier(streak).toFixed(2).replace(/0$/, '')}</small></strong>
+            </div>
+            <div className="bonus-readout-row difficulty-readout">
+              <span>Level {difficultyTier + 1}</span>
+              <strong data-testid="text-drop-speed">Drop ×{getDropSpeedMultiplier(score).toFixed(1)}</strong>
+            </div>
+          </div>
+          {balanceWarning && (
+            <div className="challenge-warning" role="status" data-testid="status-balance-warning">
+              <span className="warning-pulse" />
+              TOWER LEANING
+            </div>
+          )}
+          {windHeading !== null && (
+            <div className="wind-warning" role="status" data-testid="status-wind-gust">
+              WIND GUST {windHeading < 0 ? '←' : '→'}
+            </div>
+          )}
           <div className="best-height">
             <span className="best-height-label">Best height</span>
             <span className="best-height-value" data-testid="text-best-height">{bestHeight.toFixed(1)}<small>m</small></span>
           </div>
         </section>
 
-        <aside className="next-panel" aria-label="Next block preview">
+        <aside className={`next-panel ${nextBlock.mysteryEffect ? 'is-mystery' : ''}`} aria-label="Next block preview">
           <div className="next-panel-heading">
             <div>
               <div className="next-eyebrow">Next Block:</div>
-              <div className="next-title">Shape preview</div>
+              <div className="next-title">{nextBlock.mysteryEffect ? 'Mystery Block' : 'Shape preview'}</div>
             </div>
             <span className="next-color-dot" style={{ backgroundColor: colorToCss(nextBlock.color) }} />
           </div>
@@ -1599,7 +1634,11 @@ function App() {
           </div>
           <div className="next-block-meta">
             <span>{nextBlock.shape === 'cylinder' ? 'Cylinder' : 'Cuboid'}</span>
-            <span className="next-block-state">Ready</span>
+            <span className={`next-block-state ${nextBlock.mysteryEffect ? 'is-mystery' : ''}`}>
+              {nextBlock.mysteryEffect
+                ? nextBlock.mysteryEffect === 'spring' ? 'BOUNCY' : nextBlock.mysteryEffect === 'heavy' ? 'HEAVY' : 'MINI'
+                : 'READY'}
+            </span>
           </div>
           <div className="landing-position">
             <span>Drop position</span>
@@ -1678,6 +1717,17 @@ function App() {
         </div>
       )}
 
+      {comboPulse && status === 'ready' && (
+        <div className="combo-feedback" key={comboPulse.id} role="status" aria-live="polite" data-testid="status-perfect-combo">
+          <span className="combo-spark combo-spark-one" aria-hidden="true" />
+          <span className="combo-spark combo-spark-two" aria-hidden="true" />
+          <span className="combo-spark combo-spark-three" aria-hidden="true" />
+          <strong>PERFECT COMBO!</strong>
+          <span>+{comboPulse.points} POINTS · ×{comboPulse.multiplier.toFixed(2).replace(/0$/, '')}</span>
+          <small>STREAK {comboPulse.streak}</small>
+        </div>
+      )}
+
       {status === 'over' && (
         <div className="status-layer game-over-layer" role="dialog" aria-modal="true" aria-labelledby="game-over-title" data-testid="status-game-over">
           <section className="game-over-card">
@@ -1695,6 +1745,14 @@ function App() {
               <div className="run-stat-row">
                 <span>Total blocks stacked</span>
                 <strong data-testid="text-final-score">{finalRunStats?.score ?? score}</strong>
+              </div>
+              <div className="run-stat-row">
+                <span>Bonus points earned</span>
+                <strong data-testid="text-final-points">{(finalRunStats?.points ?? points).toLocaleString()}</strong>
+              </div>
+              <div className="run-stat-row">
+                <span>Best streak</span>
+                <strong data-testid="text-final-streak">{finalRunStats?.streak ?? streak}</strong>
               </div>
               <div className="run-stat-row best-stat-row">
                 <span>Personal best</span>
