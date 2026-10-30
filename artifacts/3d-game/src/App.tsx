@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { calculateCameraFrame, createInitialCameraFrame } from './camera-framing';
+import {
+  BASE_PLATFORM_HALF_EXTENT,
+  getCenterOfMassXZ,
+  getDifficultyTier,
+  getDropSpeedMultiplier,
+  getGustInterval,
+  getPlacementPoints,
+  getPlatformHalfExtent,
+  getStreakMultiplier,
+  isMysteryBlockNumber,
+  isOffCenter,
+  isPerfectPlacement,
+  type MysteryEffect,
+} from './game-mechanics';
 
 type GameStatus = 'loading' | 'ready' | 'over' | 'error';
 type Runtime = {
@@ -13,12 +27,21 @@ type BlockPlan = {
   shape: 'box' | 'cylinder';
   color: number;
   dimensions: [number, number, number];
+  mysteryEffect?: MysteryEffect;
 };
 type RunSummary = {
   height: number;
   score: number;
+  points: number;
+  streak: number;
   bestScore: number;
   newHighScore: boolean;
+};
+type ComboPulse = {
+  id: number;
+  streak: number;
+  multiplier: number;
+  points: number;
 };
 type GraphicsQuality = 'low' | 'medium' | 'high';
 type ControlMode = 'tap' | 'keyboard';
@@ -71,17 +94,32 @@ const THREE_URL = 'https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module
 const CANNON_URL = 'https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js';
 const BLOCK_COLORS = [0x75e3c0, 0xf28ab0, 0xf0c46b, 0x79c8dc, 0xb89ae9, 0xff9678];
 
-function makeBlockPlan(): BlockPlan {
-  const color = BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)];
-  if (Math.random() < 0.27) {
+function makeBlockPlan(blockNumber = 1): BlockPlan {
+  const shape = Math.random() < 0.27 ? 'cylinder' : 'box';
+  let dimensions: [number, number, number];
+  if (shape === 'cylinder') {
     const radius = 0.68 + Math.random() * 0.12;
     const height = 0.8 + Math.random() * 0.48;
-    return { shape: 'cylinder', color, dimensions: [radius * 2, height, radius * 2] };
+    dimensions = [radius * 2, height, radius * 2];
+  } else {
+    const width = 1.25 + Math.random() * 0.42;
+    const height = 0.72 + Math.random() * 0.5;
+    const depth = 1.2 + Math.random() * 0.42;
+    dimensions = [width, height, depth];
   }
-  const width = 1.25 + Math.random() * 0.42;
-  const height = 0.72 + Math.random() * 0.5;
-  const depth = 1.2 + Math.random() * 0.42;
-  return { shape: 'box', color, dimensions: [width, height, depth] };
+
+  const mysteryEffects: MysteryEffect[] = ['spring', 'heavy', 'mini'];
+  const mysteryEffect = isMysteryBlockNumber(blockNumber)
+    ? mysteryEffects[Math.floor(Math.random() * mysteryEffects.length)]
+    : undefined;
+  if (mysteryEffect === 'mini') {
+    dimensions = dimensions.map((dimension) => dimension * 0.72) as [number, number, number];
+  }
+
+  const color = mysteryEffect
+    ? ({ spring: 0xffb357, heavy: 0xb89ae9, mini: 0x73e2ce } as const)[mysteryEffect]
+    : BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)];
+  return { shape, color, dimensions, mysteryEffect };
 }
 
 function makeBlockGeometry(THREE: any, plan: BlockPlan) {
@@ -132,7 +170,17 @@ function App() {
   const [score, setScore] = useState(0);
   const scoreRef = useRef(score);
   scoreRef.current = score;
+  const [points, setPoints] = useState(0);
+  const pointsRef = useRef(points);
+  pointsRef.current = points;
+  const [streak, setStreak] = useState(0);
+  const streakRef = useRef(streak);
+  streakRef.current = streak;
   const [height, setHeight] = useState(0);
+  const [difficultyTier, setDifficultyTier] = useState(0);
+  const [balanceWarning, setBalanceWarning] = useState(false);
+  const [windHeading, setWindHeading] = useState<-1 | 1 | null>(null);
+  const [comboPulse, setComboPulse] = useState<ComboPulse | null>(null);
   const [bestHeight, setBestHeight] = useState(() => {
     try {
       const saved = Number(window.localStorage.getItem('stacker-best-height'));
@@ -309,8 +357,23 @@ function App() {
     let THREE: any;
     let CANNON: any;
     let platformMesh: any;
+    let platformBody: any;
+    let platformShape: any;
     let grid: any;
     let sharedBlockMaterial: any;
+    let springBlockMaterial: any;
+    let platformHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+    let appliedPlatformHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+    let platformTargetHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+    let activeDifficultyTier = 0;
+    let offCenterTime = 0;
+    let balanceWarningActive = false;
+    let gustRemaining = 0;
+    let gustDuration = 0;
+    let gustAcceleration = 0;
+    let gustSign: -1 | 1 = 1;
+    let nextGustAtScore = 4;
+    let comboSequence = 0;
     let animationTime = 0;
     let frameCount = 0;
     let lastFrameTime = 0;
@@ -334,6 +397,7 @@ function App() {
       stillFor: number;
       counted: boolean;
       color: number;
+      mysteryEffect?: MysteryEffect;
     };
     let pieces: Piece[] = [];
 
@@ -492,6 +556,7 @@ function App() {
 
       const floorMaterial = new CANNON.Material('platform');
       sharedBlockMaterial = new CANNON.Material('blocks');
+      springBlockMaterial = new CANNON.Material('mystery-spring');
       world.addContactMaterial(new CANNON.ContactMaterial(floorMaterial, sharedBlockMaterial, {
         friction: 0.58,
         restitution: 0.12,
@@ -500,9 +565,24 @@ function App() {
         friction: 0.62,
         restitution: 0.08,
       }));
+      world.addContactMaterial(new CANNON.ContactMaterial(floorMaterial, springBlockMaterial, {
+        friction: 0.5,
+        restitution: 0.78,
+      }));
+      world.addContactMaterial(new CANNON.ContactMaterial(sharedBlockMaterial, springBlockMaterial, {
+        friction: 0.52,
+        restitution: 0.7,
+      }));
+      world.addContactMaterial(new CANNON.ContactMaterial(springBlockMaterial, springBlockMaterial, {
+        friction: 0.48,
+        restitution: 0.72,
+      }));
 
-      const platformShape = new CANNON.Box(new CANNON.Vec3(1.9, 0.28, 1.9));
-      const platformBody = new CANNON.Body({ mass: 0, material: floorMaterial });
+      platformHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+      appliedPlatformHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+      platformTargetHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+      platformShape = new CANNON.Box(new CANNON.Vec3(platformHalfExtent, 0.28, platformHalfExtent));
+      platformBody = new CANNON.Body({ mass: 0, material: floorMaterial });
       platformBody.addShape(platformShape);
       platformBody.position.set(0, 0, 0);
       world.addBody(platformBody);
@@ -531,6 +611,7 @@ function App() {
       const edge = new THREE.Mesh(edgeGeometry, edgeMaterial);
       edge.position.y = 0.18;
       platformMesh.add(edge);
+      platformMesh.scale.set(1, 1, 1);
       scene.add(platformMesh);
 
       if (grid) {
@@ -573,7 +654,24 @@ function App() {
       setIsPaused(false);
       setFinalRunStats(null);
       setShareMessage('');
-      const firstBlock = makeBlockPlan();
+      setPoints(0);
+      pointsRef.current = 0;
+      setStreak(0);
+      streakRef.current = 0;
+      setComboPulse(null);
+      setBalanceWarning(false);
+      balanceWarningActive = false;
+      offCenterTime = 0;
+      setWindHeading(null);
+      gustRemaining = 0;
+      gustDuration = 0;
+      gustAcceleration = 0;
+      nextGustAtScore = 1 + getGustInterval(Math.random());
+      setDifficultyTier(0);
+      activeDifficultyTier = 0;
+      platformHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+      platformTargetHalfExtent = BASE_PLATFORM_HALF_EXTENT;
+      const firstBlock = makeBlockPlan(1);
       nextBlockRef.current = firstBlock;
       setNextBlock(firstBlock);
       previewPlanUpdaterRef.current?.(firstBlock);
@@ -593,7 +691,7 @@ function App() {
       playSoundEffect('drop');
       const plan = nextBlockRef.current;
       const color = plan.color;
-      const material = sharedBlockMaterial;
+      const material = plan.mysteryEffect === 'spring' ? springBlockMaterial : sharedBlockMaterial;
       const settledTowerTop = pieces.reduce((top, piece) => {
         const halfHeight = (piece.body.userData?.dims?.[1] || 1) / 2;
         const pieceTop = piece.body.position.y + halfHeight;
@@ -604,7 +702,7 @@ function App() {
         roughness: 0.27,
         metalness: 0.18,
         emissive: color,
-        emissiveIntensity: 0.055,
+        emissiveIntensity: plan.mysteryEffect ? 0.18 : 0.055,
       });
       const geometry = makeBlockGeometry(THREE, plan);
       let shape: any;
@@ -618,6 +716,8 @@ function App() {
       } else {
         shape = new CANNON.Box(new CANNON.Vec3(dims[0] / 2, dims[1] / 2, dims[2] / 2));
       }
+      if (plan.mysteryEffect === 'heavy') mass *= 2.6;
+      if (plan.mysteryEffect === 'mini') mass *= 0.72 ** 3;
 
       const mesh = new THREE.Mesh(geometry, meshMaterial);
       mesh.castShadow = true;
@@ -642,10 +742,19 @@ function App() {
       );
       body.velocity.set((Math.random() - 0.5) * 0.2, 0, (Math.random() - 0.5) * 0.2);
       body.angularVelocity.set((Math.random() - 0.5) * 0.25, (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.25);
-      body.userData = { dims };
+      body.userData = { dims, mysteryEffect: plan.mysteryEffect };
       world.addBody(body);
-      pieces.push({ body, mesh, kind: plan.shape, born: animationTime, stillFor: 0, counted: false, color });
-      const following = makeBlockPlan();
+      pieces.push({
+        body,
+        mesh,
+        kind: plan.shape,
+        born: animationTime,
+        stillFor: 0,
+        counted: false,
+        color,
+        mysteryEffect: plan.mysteryEffect,
+      });
+      const following = makeBlockPlan(scoreRef.current + 2);
       nextBlockRef.current = following;
       setNextBlock(following);
       previewPlanUpdaterRef.current?.(following);
@@ -949,6 +1058,24 @@ function App() {
             for (const piece of malformedBeforeStep) disposePiece(piece);
             if (malformedBeforeStep.length) pieces = pieces.filter((piece) => !malformedBeforeStep.includes(piece));
 
+            const dropSpeedMultiplier = getDropSpeedMultiplier(scoreRef.current);
+            for (const piece of pieces) {
+              if (!piece.counted && piece.body.mass > 0) {
+                piece.body.force.y -= piece.body.mass * 9.82 * (dropSpeedMultiplier - 1);
+              }
+            }
+            if (gustRemaining > 0) {
+              const gustProgress = Math.min(1, Math.max(0, (gustDuration - gustRemaining) / gustDuration));
+              const gustEnvelope = 0.3 + 0.7 * Math.sin(Math.PI * gustProgress);
+              for (const piece of pieces) {
+                if (piece.body.mass <= 0) continue;
+                piece.body.wakeUp();
+                piece.body.force.x += gustSign * gustAcceleration * gustEnvelope * piece.body.mass;
+              }
+              gustRemaining = Math.max(0, gustRemaining - delta);
+              if (gustRemaining === 0) setWindHeading(null);
+            }
+
             world.step(1 / 120, delta, 8);
             let tallest = 0.28;
             let settledTowerTop = 0.28;
@@ -995,15 +1122,109 @@ function App() {
                 if (animationTime - piece.born > 0.7 && linearSpeed < 0.16 && angularSpeed < 0.24 && body.position.y > 0.2) {
                   piece.stillFor += delta;
                   if (piece.stillFor > 0.42) {
+                    const supportPositions = pieces
+                      .filter((other) => other !== piece && other.counted)
+                      .map((other) => ({
+                        x: other.body.position.x,
+                        z: other.body.position.z,
+                        mass: other.body.mass,
+                      }));
+                    const supportCenter = getCenterOfMassXZ(supportPositions);
+                    const distanceFromCenter = Math.hypot(
+                      body.position.x - supportCenter.x,
+                      body.position.z - supportCenter.z,
+                    );
+                    const perfect = isPerfectPlacement(distanceFromCenter, linearSpeed, angularSpeed);
+                    const nextStreak = streakRef.current + 1;
+                    const streakMultiplier = getStreakMultiplier(nextStreak);
+                    const multiplier = Math.min(3, streakMultiplier * (perfect ? 1.5 : 1));
+                    const pointsEarned = getPlacementPoints(nextStreak, perfect);
                     piece.counted = true;
                     body.sleep();
                     scoreRef.current += 1;
+                    streakRef.current = nextStreak;
+                    pointsRef.current += pointsEarned;
                     setScore(scoreRef.current);
+                    setStreak(nextStreak);
+                    setPoints(pointsRef.current);
+                    if (perfect) {
+                      setComboPulse({
+                        id: ++comboSequence,
+                        streak: nextStreak,
+                        multiplier,
+                        points: pointsEarned,
+                      });
+                    }
                     playSoundEffect('land');
+                    if (scoreRef.current >= nextGustAtScore && gustRemaining <= 0) {
+                      gustDuration = 1.45;
+                      gustRemaining = gustDuration;
+                      gustSign = Math.random() < 0.5 ? -1 : 1;
+                      gustAcceleration = 0.42 + Math.min(0.2, scoreRef.current * 0.008);
+                      setWindHeading(gustSign);
+                      for (const stackedPiece of pieces) stackedPiece.body.wakeUp();
+                      nextGustAtScore = scoreRef.current + getGustInterval(Math.random());
+                    }
                   }
                 } else {
                   piece.stillFor = 0;
                 }
+              }
+            }
+
+            const towerHeightMeters = Math.max(0, tallest - 0.28);
+            const nextDifficultyTier = getDifficultyTier(towerHeightMeters);
+            if (nextDifficultyTier !== activeDifficultyTier) {
+              activeDifficultyTier = nextDifficultyTier;
+              setDifficultyTier(nextDifficultyTier);
+            }
+            platformTargetHalfExtent = getPlatformHalfExtent(towerHeightMeters);
+            const platformEase = 1 - Math.exp(-0.14 * delta);
+            platformHalfExtent += (platformTargetHalfExtent - platformHalfExtent) * platformEase;
+            if (platformShape && platformBody && platformMesh) {
+              if (Math.abs(platformHalfExtent - appliedPlatformHalfExtent) > 0.001) {
+                platformShape.halfExtents.set(platformHalfExtent, 0.28, platformHalfExtent);
+                platformShape.updateConvexPolyhedronRepresentation();
+                platformShape.updateBoundingSphereRadius();
+                platformBody.updateBoundingRadius();
+                platformBody.updateAABB();
+                platformBody.aabbNeedsUpdate = true;
+                if (world.broadphase) world.broadphase.dirty = true;
+                appliedPlatformHalfExtent = platformHalfExtent;
+              }
+              const platformScale = platformHalfExtent / BASE_PLATFORM_HALF_EXTENT;
+              platformMesh.scale.x = platformScale;
+              platformMesh.scale.z = platformScale;
+            }
+
+            const countedPositions = pieces
+              .filter((piece) => piece.counted)
+              .map((piece) => ({
+                x: piece.body.position.x,
+                z: piece.body.position.z,
+                mass: piece.body.mass,
+              }));
+            if (countedPositions.length > 0) {
+              const center = getCenterOfMassXZ(countedPositions);
+              const warningThreshold = Math.max(0.55, platformHalfExtent * 0.45);
+              if (isOffCenter(center.x, center.z, warningThreshold)) {
+                offCenterTime += delta;
+                if (offCenterTime >= 2 && !balanceWarningActive) {
+                  balanceWarningActive = true;
+                  setBalanceWarning(true);
+                }
+              } else {
+                offCenterTime = 0;
+                if (balanceWarningActive && !isOffCenter(center.x, center.z, warningThreshold - 0.12)) {
+                  balanceWarningActive = false;
+                  setBalanceWarning(false);
+                }
+              }
+            } else {
+              offCenterTime = 0;
+              if (balanceWarningActive) {
+                balanceWarningActive = false;
+                setBalanceWarning(false);
               }
             }
 
@@ -1014,6 +1235,8 @@ function App() {
               pieces = pieces.filter((piece) => !removedPieces.has(piece));
               gameOver = true;
               stopBackgroundMusic();
+              setWindHeading(null);
+              setBalanceWarning(false);
               const runScore = scoreRef.current;
               const runHeight = Math.max(0, Math.round((tallest - 0.28) * 10) / 10);
               const previousBest = bestScoreRef.current;
@@ -1028,7 +1251,14 @@ function App() {
                   // The run summary remains available even if browser storage is unavailable.
                 }
               }
-              setFinalRunStats({ height: runHeight, score: runScore, bestScore: best, newHighScore });
+              setFinalRunStats({
+                height: runHeight,
+                score: runScore,
+                points: pointsRef.current,
+                streak: streakRef.current,
+                bestScore: best,
+                newHighScore,
+              });
               setShareMessage('');
               updateStatus('over');
             }
