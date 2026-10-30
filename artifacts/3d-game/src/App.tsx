@@ -77,6 +77,14 @@ function makeBlockPlan(): BlockPlan {
   return { shape: 'box', color, dimensions: [width, height, depth] };
 }
 
+function makeBlockGeometry(THREE: any, plan: BlockPlan) {
+  if (plan.shape === 'cylinder') {
+    const radius = plan.dimensions[0] / 2;
+    return new THREE.CylinderGeometry(radius, radius, plan.dimensions[1], 10, 1);
+  }
+  return new THREE.BoxGeometry(...plan.dimensions);
+}
+
 function colorToCss(color: number) {
   return `#${color.toString(16).padStart(6, '0')}`;
 }
@@ -109,6 +117,8 @@ function ArrowIcon() {
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fallbackCanvasRef = useRef<HTMLCanvasElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const previewPlanUpdaterRef = useRef<((plan: BlockPlan) => void) | null>(null);
   const runtimeRef = useRef<Runtime | null>(null);
   const statusRef = useRef<GameStatus>('loading');
   const [status, setStatus] = useState<GameStatus>('loading');
@@ -153,6 +163,7 @@ function App() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const musicRef = useRef<{ oscillators: OscillatorNode[]; gain: GainNode } | null>(null);
   const [nextBlock, setNextBlock] = useState<BlockPlan>(makeBlockPlan);
+  const [threePreviewActive, setThreePreviewActive] = useState(false);
   const [dropOffset, setDropOffset] = useState(0);
   const [previewRotation, setPreviewRotation] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
@@ -277,6 +288,14 @@ function App() {
     let resizeObserver: ResizeObserver | undefined;
     let resizeHandler: (() => void) | undefined;
     let renderer: any;
+    let previewRenderer: any;
+    let previewScene: any;
+    let previewCamera: any;
+    let previewRoot: any;
+    let previewMesh: any;
+    let previewResizeObserver: ResizeObserver | undefined;
+    let previewResizeHandler: (() => void) | undefined;
+    const previewCanvas = previewCanvasRef.current;
     let scene: any;
     let camera: any;
     let world: any;
@@ -309,6 +328,122 @@ function App() {
 
     updateStatus('loading');
     setErrorMessage('');
+    setThreePreviewActive(false);
+
+    const updatePreviewPlan = (plan: BlockPlan) => {
+      if (!THREE || !previewScene || !previewRoot) return;
+      if (previewMesh) {
+        previewRoot.remove(previewMesh);
+        previewMesh.geometry?.dispose();
+        previewMesh.material?.dispose();
+      }
+      const geometry = makeBlockGeometry(THREE, plan);
+      const material = new THREE.MeshStandardMaterial({
+        color: plan.color,
+        roughness: 0.3,
+        metalness: 0.12,
+        emissive: plan.color,
+        emissiveIntensity: 0.04,
+      });
+      previewMesh = new THREE.Mesh(geometry, material);
+      previewMesh.castShadow = false;
+      previewMesh.receiveShadow = false;
+      previewRoot.add(previewMesh);
+    };
+
+    const disposePreview = () => {
+      previewResizeObserver?.disconnect();
+      previewResizeObserver = undefined;
+      if (previewResizeHandler) window.removeEventListener('resize', previewResizeHandler);
+      previewResizeHandler = undefined;
+      previewPlanUpdaterRef.current = null;
+      if (previewMesh) {
+        previewRoot?.remove(previewMesh);
+        previewMesh.geometry?.dispose();
+        previewMesh.material?.dispose();
+        previewMesh = null;
+      }
+      previewRenderer?.dispose();
+      previewRenderer?.forceContextLoss();
+      previewRenderer = null;
+      previewScene = null;
+      previewCamera = null;
+      previewRoot = null;
+      setThreePreviewActive(false);
+    };
+
+    const initializePreviewRenderer = () => {
+      if (!previewCanvas || !THREE || usingFallback) return;
+      let context: WebGL2RenderingContext | null = null;
+      try {
+        context = previewCanvas.getContext('webgl2', {
+          antialias: true,
+          alpha: true,
+          powerPreference: 'low-power',
+        });
+        if (!context) return;
+        previewRenderer = new THREE.WebGLRenderer({
+          canvas: previewCanvas,
+          context,
+          antialias: true,
+          alpha: true,
+          powerPreference: 'low-power',
+        });
+        previewRenderer.setClearColor(0x000000, 0);
+        previewRenderer.outputColorSpace = THREE.SRGBColorSpace;
+        previewRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+        previewRenderer.toneMappingExposure = 1.08;
+        previewRenderer.shadowMap.enabled = false;
+
+        previewScene = new THREE.Scene();
+        previewRoot = new THREE.Group();
+        previewScene.add(previewRoot);
+        previewScene.add(new THREE.HemisphereLight(0xeaffff, 0x29414d, 1.85));
+
+        const keyLight = new THREE.DirectionalLight(0xffffff, 2.25);
+        keyLight.position.set(-3.5, 4.5, 4);
+        previewScene.add(keyLight);
+        const fillLight = new THREE.PointLight(0x7be8f2, 1.35);
+        fillLight.position.set(3, 1.5, 2.5);
+        previewScene.add(fillLight);
+        const rimLight = new THREE.PointLight(0x9e91ff, 1.1);
+        rimLight.position.set(-2.5, 1, -3);
+        previewScene.add(rimLight);
+
+        previewCamera = new THREE.OrthographicCamera(-1.8, 1.8, 1.3, -1.3, 0.1, 30);
+        previewCamera.position.set(3.7, 2.8, 4.2);
+        previewCamera.lookAt(0, 0, 0);
+
+        const resizePreview = () => {
+          if (!previewRenderer || !previewCamera || !previewCanvas) return;
+          const width = Math.max(1, previewCanvas.clientWidth);
+          const height = Math.max(1, previewCanvas.clientHeight);
+          const aspect = width / height;
+          const viewHeight = 2.55;
+          previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+          previewRenderer.setSize(width, height, false);
+          previewCamera.left = -(viewHeight * aspect) / 2;
+          previewCamera.right = (viewHeight * aspect) / 2;
+          previewCamera.top = viewHeight / 2;
+          previewCamera.bottom = -viewHeight / 2;
+          previewCamera.updateProjectionMatrix();
+        };
+        previewResizeHandler = resizePreview;
+        previewResizeObserver = new ResizeObserver(resizePreview);
+        previewResizeObserver.observe(previewCanvas.parentElement || previewCanvas);
+        window.addEventListener('resize', resizePreview);
+        resizePreview();
+
+        previewPlanUpdaterRef.current = updatePreviewPlan;
+        updatePreviewPlan(nextBlockRef.current);
+        setThreePreviewActive(true);
+      } catch {
+        disposePreview();
+        if (!context?.isContextLost()) {
+          context?.getExtension('WEBGL_lose_context')?.loseContext();
+        }
+      }
+    };
 
     const disposePiece = (piece: Piece) => {
       if (world) world.removeBody(piece.body);
@@ -430,6 +565,7 @@ function App() {
       const firstBlock = makeBlockPlan();
       nextBlockRef.current = firstBlock;
       setNextBlock(firstBlock);
+      previewPlanUpdaterRef.current?.(firstBlock);
       buildWorld();
       cameraTargetY = 0.65;
       scoreRef.current = 0;
@@ -452,18 +588,16 @@ function App() {
         emissive: color,
         emissiveIntensity: 0.055,
       });
-      let geometry: any;
+      const geometry = makeBlockGeometry(THREE, plan);
       let shape: any;
       let mass = 1.8;
       const dims = plan.dimensions;
 
       if (plan.shape === 'cylinder') {
         const radius = dims[0] / 2;
-        geometry = new THREE.CylinderGeometry(radius, radius, dims[1], 10, 1);
         shape = new CANNON.Cylinder(radius, radius, dims[1], 10);
         mass = 1.9;
       } else {
-        geometry = new THREE.BoxGeometry(...dims);
         shape = new CANNON.Box(new CANNON.Vec3(dims[0] / 2, dims[1] / 2, dims[2] / 2));
       }
 
@@ -496,6 +630,7 @@ function App() {
       const following = makeBlockPlan();
       nextBlockRef.current = following;
       setNextBlock(following);
+      previewPlanUpdaterRef.current?.(following);
       controlsRef.current = { x: 0, rotation: 0 };
       setDropOffset(0);
       setPreviewRotation(0);
@@ -584,6 +719,7 @@ function App() {
           renderer.toneMapping = THREE.ACESFilmicToneMapping;
           renderer.toneMappingExposure = 1.22;
         }
+        initializePreviewRenderer();
 
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0x151b24);
@@ -886,6 +1022,15 @@ function App() {
             if (frameCount % 8 === 0) setHeight(Math.max(0, tallest - 0.28));
           }
           renderer.render(scene, camera);
+          if (!isMainMenuRef.current && previewRenderer && previewScene && previewCamera && previewRoot) {
+            previewRoot.rotation.y = controlsRef.current.rotation + animationTime * 0.28;
+            previewRoot.rotation.x = 0.12 + Math.sin(animationTime * 0.36) * 0.035;
+            try {
+              previewRenderer.render(previewScene, previewCamera);
+            } catch {
+              disposePreview();
+            }
+          }
         };
 
         runtimeRef.current = {
@@ -906,6 +1051,7 @@ function App() {
           resizeObserver?.disconnect();
           window.removeEventListener('resize', resize);
           resizeHandler = undefined;
+          disposePreview();
           clearPieces();
           if (platformMesh) {
             scene.remove(platformMesh);
@@ -932,6 +1078,7 @@ function App() {
         };
       } catch (error) {
         if (disposed) return;
+        disposePreview();
         const message = error instanceof Error ? error.message : 'The game engine could not be loaded.';
         setErrorMessage(message);
         updateStatus('error');
@@ -950,6 +1097,7 @@ function App() {
       if (menuExitTimerRef.current !== undefined) window.clearTimeout(menuExitTimerRef.current);
       if (settingsCloseTimerRef.current !== undefined) window.clearTimeout(settingsCloseTimerRef.current);
       if (runtimeRef.current) runtimeRef.current.dispose();
+      disposePreview();
       runtimeRef.current = null;
       stopBackgroundMusic();
       if (audioContextRef.current) {
@@ -1158,22 +1306,29 @@ function App() {
       <aside className="next-panel" aria-label="Next block preview">
         <div className="next-panel-heading">
           <div>
-            <div className="next-eyebrow">Up next</div>
-            <div className="next-title">Next Block</div>
+            <div className="next-eyebrow">Next Block:</div>
+            <div className="next-title">Shape preview</div>
           </div>
           <span className="next-color-dot" style={{ backgroundColor: colorToCss(nextBlock.color) }} />
         </div>
-        <div className="next-preview-stage">
-          <div
-            className={`next-preview-shape ${nextBlock.shape === 'cylinder' ? 'is-cylinder' : 'is-cuboid'}`}
-            style={{
-              backgroundColor: colorToCss(nextBlock.color),
-              width: `${Math.max(48, Math.min(72, nextBlock.dimensions[0] * 42))}px`,
-              height: `${Math.max(40, Math.min(58, nextBlock.dimensions[1] * 42))}px`,
-              transform: `rotateX(-22deg) rotateY(${previewRotation + 28}deg) rotateZ(-4deg)`,
-            }}
-          />
-          <div className="preview-shadow" />
+        <div className={`next-preview-stage ${threePreviewActive ? 'has-three-renderer' : ''}`}>
+          <canvas ref={previewCanvasRef} className="next-preview-canvas" aria-hidden="true" />
+          {!threePreviewActive && (
+            <>
+              <div className="preview-fallback-rotator">
+                <div
+                  className={`next-preview-shape ${nextBlock.shape === 'cylinder' ? 'is-cylinder' : 'is-cuboid'}`}
+                  style={{
+                    backgroundColor: colorToCss(nextBlock.color),
+                    width: `${Math.max(48, Math.min(72, nextBlock.dimensions[0] * 42))}px`,
+                    height: `${Math.max(40, Math.min(58, nextBlock.dimensions[1] * 42))}px`,
+                    transform: `rotateX(-22deg) rotateY(${previewRotation + 28}deg) rotateZ(-4deg)`,
+                  }}
+                />
+              </div>
+              <div className="preview-shadow" />
+            </>
+          )}
         </div>
         <div className="next-block-meta">
           <span>{nextBlock.shape === 'cylinder' ? 'Cylinder' : 'Cuboid'}</span>
