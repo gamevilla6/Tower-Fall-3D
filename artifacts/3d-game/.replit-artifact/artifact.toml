@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/3d-game/"
+title = "3D Physics Stacker"
+description = "A browser-based 3D physics stacking game where players drop colorful shapes onto a growing tower and try to build as high as they can."
+version = "1.0.0"
+id = "artifacts/3d-game"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/3d-game/" ]
+localPort = 24982
+
+[services.development]
+run = "pnpm --filter @workspace/3d-game run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/3d-game", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/3d-game/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24982"
+BASE_PATH = "/3d-game/"
