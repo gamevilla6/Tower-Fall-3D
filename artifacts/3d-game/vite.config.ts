@@ -5,35 +5,21 @@ import { defineConfig } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
-const rawPort = process.env.PORT;
-
-if (!rawPort) {
-  throw new Error(
-    'PORT environment variable is required but was not provided.',
-  );
-}
-
+const rawPort = process.env.PORT ?? '5173';
 const port = Number(rawPort);
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    'BASE_PATH environment variable is required but was not provided.',
-  );
-}
-
-export default defineConfig({
-  base: basePath,
+export default defineConfig(async ({ command, mode }) => ({
+  // Production URLs must work under /Tower-Fall-3D/ as well as custom domains.
+  base: command === 'build' ? './' : (process.env.BASE_PATH ?? '/'),
   plugins: [
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== 'production' &&
+    ...(command === 'serve' ? [runtimeErrorOverlay()] : []),
+    ...(command === 'serve' &&
     process.env.REPL_ID !== undefined
       ? [
           await import('@replit/vite-plugin-cartographer').then((m) =>
@@ -57,11 +43,17 @@ export default defineConfig({
         'attached_assets',
       ),
     },
-    dedupe: ['react', 'react-dom'],
+    // The Pages root has no React dependency; resolve it from the app package.
+    dedupe: mode === 'github-pages' ? [] : ['react', 'react-dom'],
   },
-  root: path.resolve(import.meta.dirname),
+  root: mode === 'github-pages'
+    ? path.resolve(import.meta.dirname, '../..')
+    : path.resolve(import.meta.dirname),
+  publicDir: path.resolve(import.meta.dirname, 'public'),
   build: {
-    outDir: path.resolve(import.meta.dirname, 'dist/public'),
+    outDir: mode === 'github-pages'
+      ? path.resolve(import.meta.dirname, '../../generated-artifacts/github-pages')
+      : path.resolve(import.meta.dirname, 'dist/public'),
     emptyOutDir: true,
   },
   server: {
@@ -78,4 +70,4 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: true,
   },
-});
+}));
