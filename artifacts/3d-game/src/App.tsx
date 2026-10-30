@@ -377,7 +377,8 @@ function App() {
     let animationTime = 0;
     let frameCount = 0;
     let lastFrameTime = 0;
-    const initialCameraFrame = createInitialCameraFrame();
+    const initialAspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
+    const initialCameraFrame = createInitialCameraFrame(initialAspect, settingsRef.current.cameraDistance);
     let cameraTargetY = initialCameraFrame.targetY;
     let cameraDistance = initialCameraFrame.distance;
     const cameraElevation = 0.5;
@@ -676,7 +677,10 @@ function App() {
       setNextBlock(firstBlock);
       previewPlanUpdaterRef.current?.(firstBlock);
       buildWorld();
-      const initialCameraFrame = createInitialCameraFrame();
+      const initialCameraFrame = createInitialCameraFrame(
+        camera?.aspect ?? canvas.clientWidth / Math.max(canvas.clientHeight, 1),
+        settingsRef.current.cameraDistance,
+      );
       cameraTargetY = initialCameraFrame.targetY;
       cameraDistance = initialCameraFrame.distance;
       scoreRef.current = 0;
@@ -852,8 +856,13 @@ function App() {
         scene.background = new THREE.Color(0x151b24);
         scene.fog = new THREE.FogExp2(0x151b24, 0.019);
         camera = new THREE.PerspectiveCamera(36, 1, 0.1, 1000);
-        camera.position.set(7.6, 7.2, 9.6);
-        camera.lookAt(0, 0.5, 0);
+        const initialHorizontalRadius = initialCameraFrame.distance * Math.cos(cameraElevation);
+        camera.position.set(
+          Math.cos(cameraOrbitOffset) * initialHorizontalRadius,
+          initialCameraFrame.targetY + initialCameraFrame.distance * Math.sin(cameraElevation),
+          Math.sin(cameraOrbitOffset) * initialHorizontalRadius,
+        );
+        camera.lookAt(0, initialCameraFrame.targetY, 0);
 
         const hemi = new THREE.HemisphereLight(0xc7f2e7, 0x252b38, 2.15);
         scene.add(hemi);
@@ -1530,7 +1539,7 @@ function App() {
     <main className={`game-shell ${status === 'loading' ? 'is-loading' : ''} ${status === 'over' ? 'is-over' : ''} ${isPaused ? 'is-paused' : ''} ${showMenu && !menuExiting ? 'is-menu' : ''}`}>
       <div className="game-canvas-wrap" aria-label="Three-dimensional block stacking game">
         <canvas ref={canvasRef} data-testid="game-canvas" aria-label="Click to drop a physics block" />
-        <canvas ref={fallbackCanvasRef} className="fallback-canvas" aria-label="Click to drop a physics block" />
+        <canvas ref={fallbackCanvasRef} className="fallback-canvas" data-testid="game-fallback-canvas" aria-label="Click to drop a physics block" />
       </div>
       <div className="game-noise" aria-hidden="true" />
 

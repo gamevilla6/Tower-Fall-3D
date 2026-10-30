@@ -92,8 +92,8 @@ describe('camera framing', () => {
   ] as const) {
     describe(`${viewportName} viewport`, () => {
       it('keeps the platform visible at the start and after restart', () => {
-        const initial = createInitialCameraFrame();
-        const afterRestart = createInitialCameraFrame();
+        const initial = createInitialCameraFrame(aspect);
+        const afterRestart = createInitialCameraFrame(aspect);
         const initialScene = assertSceneFits(0.28, 0.28, aspect);
         const restartedScene = assertSceneFits(0.28, 0.28, aspect);
         assert.equal(afterRestart.targetY, initial.targetY);
@@ -101,7 +101,9 @@ describe('camera framing', () => {
         assert.equal(restartedScene.targetY, initialScene.targetY);
         assert.equal(restartedScene.distance, initialScene.distance);
         assert.equal(initial.targetY, 0.65);
-        assert.equal(initial.distance, 14);
+        assert.equal(initial.distance, initialScene.distance);
+        if (viewportName === 'desktop') assert.equal(initial.distance, 14);
+        else assert.ok(initial.distance > 14);
       });
 
       it('keeps a falling block visible above the platform', () => {

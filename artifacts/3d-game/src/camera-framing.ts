@@ -18,8 +18,19 @@ export type CameraFrameState = {
   distance: number;
 };
 
-export function createInitialCameraFrame(): CameraFrameState {
-  return { targetY: 0.65, distance: 14 };
+export function createInitialCameraFrame(
+  aspect = 16 / 9,
+  distancePreference: 'close' | 'standard' | 'wide' = 'standard',
+): CameraFrameState {
+  const frame = calculateCameraFrame({
+    settledTowerTop: 0.28,
+    activeBlockTop: 0.28,
+    aspect,
+    fov: 36,
+    cameraElevation: 0.5,
+    distancePreference,
+  });
+  return { targetY: frame.targetY, distance: frame.distance };
 }
 
 export function calculateCameraFrame({
