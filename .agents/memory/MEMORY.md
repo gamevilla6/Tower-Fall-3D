@@ -1,0 +1,1 @@
+- [3D preview without WebGL](3d-preview-without-webgl.md) — keep physics-backed games usable when an embedded preview cannot create a WebGL context.
