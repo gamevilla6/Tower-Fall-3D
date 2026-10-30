@@ -1288,69 +1288,71 @@ function App() {
         </div>
       </header>
 
-      <section className="hud" aria-label="Current run statistics">
-        <div className="hud-label">Blocks placed</div>
-        <div className="score-value" data-testid="text-score">{String(score).padStart(2, '0')}</div>
-        <div className="hud-divider" />
-        <div className="height-line">
-          <span className="height-value" data-testid="text-tower-height">{height.toFixed(1)}</span>
-          <span className="height-unit">meters</span>
-        </div>
-        <div className="hud-caption">Tower height</div>
-        <div className="best-height">
-          <span className="best-height-label">Best height</span>
-          <span className="best-height-value" data-testid="text-best-height">{bestHeight.toFixed(1)}<small>m</small></span>
-        </div>
-      </section>
-
-      <aside className="next-panel" aria-label="Next block preview">
-        <div className="next-panel-heading">
-          <div>
-            <div className="next-eyebrow">Next Block:</div>
-            <div className="next-title">Shape preview</div>
+      <div className="hud-rail" role="group" aria-label="Game HUD">
+        <section className="hud" aria-label="Current run statistics">
+          <div className="hud-label">Blocks placed</div>
+          <div className="score-value" data-testid="text-score">{String(score).padStart(2, '0')}</div>
+          <div className="hud-divider" />
+          <div className="height-line">
+            <span className="height-value" data-testid="text-tower-height">{height.toFixed(1)}</span>
+            <span className="height-unit">meters</span>
           </div>
-          <span className="next-color-dot" style={{ backgroundColor: colorToCss(nextBlock.color) }} />
-        </div>
-        <div className={`next-preview-stage ${threePreviewActive ? 'has-three-renderer' : ''}`}>
-          <canvas ref={previewCanvasRef} className="next-preview-canvas" aria-hidden="true" />
-          {!threePreviewActive && (
-            <>
-              <div className="preview-fallback-rotator">
-                <div
-                  className={`next-preview-shape ${nextBlock.shape === 'cylinder' ? 'is-cylinder' : 'is-cuboid'}`}
-                  style={{
-                    backgroundColor: colorToCss(nextBlock.color),
-                    width: `${Math.max(48, Math.min(72, nextBlock.dimensions[0] * 42))}px`,
-                    height: `${Math.max(40, Math.min(58, nextBlock.dimensions[1] * 42))}px`,
-                    transform: `rotateX(-22deg) rotateY(${previewRotation + 28}deg) rotateZ(-4deg)`,
-                  }}
-                />
-              </div>
-              <div className="preview-shadow" />
-            </>
-          )}
-        </div>
-        <div className="next-block-meta">
-          <span>{nextBlock.shape === 'cylinder' ? 'Cylinder' : 'Cuboid'}</span>
-          <span className="next-block-state">Ready</span>
-        </div>
-        <div className="landing-position">
-          <span>Drop position</span>
-          <span>{dropOffset > 0 ? '+' : ''}{dropOffset.toFixed(2)}</span>
-        </div>
-        <div className="position-meter" aria-hidden="true">
-          <span className="position-meter-center" />
-          <span className="position-meter-marker" style={{ left: `${50 + dropOffset * 42}%` }} />
-        </div>
-        <div className="preview-controls">
-          <button onClick={() => moveDropPosition(-1)} aria-label="Move block left" data-testid="button-move-left">←</button>
-          <button onClick={rotateNextBlock} aria-label="Rotate block" data-testid="button-rotate-block">↻</button>
-          <button onClick={() => moveDropPosition(1)} aria-label="Move block right" data-testid="button-move-right">→</button>
-        </div>
-        <div className="next-controls-hint">
-          {settings.controlMode === 'keyboard' ? '← → move · ↑ / R rotate' : 'Use buttons to move · rotate'}
-        </div>
-      </aside>
+          <div className="hud-caption">Tower height</div>
+          <div className="best-height">
+            <span className="best-height-label">Best height</span>
+            <span className="best-height-value" data-testid="text-best-height">{bestHeight.toFixed(1)}<small>m</small></span>
+          </div>
+        </section>
+
+        <aside className="next-panel" aria-label="Next block preview">
+          <div className="next-panel-heading">
+            <div>
+              <div className="next-eyebrow">Next Block:</div>
+              <div className="next-title">Shape preview</div>
+            </div>
+            <span className="next-color-dot" style={{ backgroundColor: colorToCss(nextBlock.color) }} />
+          </div>
+          <div className={`next-preview-stage ${threePreviewActive ? 'has-three-renderer' : ''}`}>
+            <canvas ref={previewCanvasRef} className="next-preview-canvas" aria-hidden="true" />
+            {!threePreviewActive && (
+              <>
+                <div className="preview-fallback-rotator">
+                  <div
+                    className={`next-preview-shape ${nextBlock.shape === 'cylinder' ? 'is-cylinder' : 'is-cuboid'}`}
+                    style={{
+                      backgroundColor: colorToCss(nextBlock.color),
+                      width: `${Math.max(48, Math.min(72, nextBlock.dimensions[0] * 42))}px`,
+                      height: `${Math.max(40, Math.min(58, nextBlock.dimensions[1] * 42))}px`,
+                      transform: `rotateX(-22deg) rotateY(${previewRotation + 28}deg) rotateZ(-4deg)`,
+                    }}
+                  />
+                </div>
+                <div className="preview-shadow" />
+              </>
+            )}
+          </div>
+          <div className="next-block-meta">
+            <span>{nextBlock.shape === 'cylinder' ? 'Cylinder' : 'Cuboid'}</span>
+            <span className="next-block-state">Ready</span>
+          </div>
+          <div className="landing-position">
+            <span>Drop position</span>
+            <span>{dropOffset > 0 ? '+' : ''}{dropOffset.toFixed(2)}</span>
+          </div>
+          <div className="position-meter" aria-hidden="true">
+            <span className="position-meter-center" />
+            <span className="position-meter-marker" style={{ left: `${50 + dropOffset * 42}%` }} />
+          </div>
+          <div className="preview-controls">
+            <button onClick={() => moveDropPosition(-1)} aria-label="Move block left" data-testid="button-move-left">←</button>
+            <button onClick={rotateNextBlock} aria-label="Rotate block" data-testid="button-rotate-block">↻</button>
+            <button onClick={() => moveDropPosition(1)} aria-label="Move block right" data-testid="button-move-right">→</button>
+          </div>
+          <div className="next-controls-hint">
+            {settings.controlMode === 'keyboard' ? '← → move · ↑ / R rotate' : 'Use buttons to move · rotate'}
+          </div>
+        </aside>
+      </div>
 
       <footer className="game-bottom">
         <div>
