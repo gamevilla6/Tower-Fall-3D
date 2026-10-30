@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { calculateCameraFrame, createInitialCameraFrame } from './camera-framing';
 
 type GameStatus = 'loading' | 'ready' | 'over' | 'error';
 type Runtime = {
@@ -307,8 +308,9 @@ function App() {
     let animationTime = 0;
     let frameCount = 0;
     let lastFrameTime = 0;
-    let cameraTargetY = 0.65;
-    let cameraDistance = 14;
+    const initialCameraFrame = createInitialCameraFrame();
+    let cameraTargetY = initialCameraFrame.targetY;
+    let cameraDistance = initialCameraFrame.distance;
     const cameraElevation = 0.5;
     const cameraOrbitOffset = Math.atan2(9.6, 7.6);
     let gameOver = false;
@@ -570,8 +572,9 @@ function App() {
       setNextBlock(firstBlock);
       previewPlanUpdaterRef.current?.(firstBlock);
       buildWorld();
-      cameraTargetY = 0.65;
-      cameraDistance = 14;
+      const initialCameraFrame = createInitialCameraFrame();
+      cameraTargetY = initialCameraFrame.targetY;
+      cameraDistance = initialCameraFrame.distance;
       scoreRef.current = 0;
       setScore(0);
       setHeight(0);
@@ -1024,22 +1027,17 @@ function App() {
               updateStatus('over');
             }
 
-            const framedTop = Math.max(activeBlockTop, settledTowerTop + 3.5);
-            const trackedTop = Math.max(activeBlockTop, settledTowerTop);
-            const desiredTarget = Math.max(0.65, (0.28 + trackedTop) / 2);
+            const frame = calculateCameraFrame({
+              settledTowerTop,
+              activeBlockTop,
+              aspect: camera.aspect,
+              fov: camera.fov,
+              cameraElevation,
+            });
             const targetAlpha = 1 - Math.exp(-1.8 * delta);
             const cameraAlpha = 1 - Math.exp(-1.55 * delta);
-            cameraTargetY += (desiredTarget - cameraTargetY) * targetAlpha;
-
-            const frameFill = 0.76;
-            const verticalSpan = Math.max(5.2, framedTop - 0.28 + 1);
-            const halfFovTangent = Math.tan((camera.fov * Math.PI) / 360);
-            const aspect = Math.max(camera.aspect || 1, 0.38);
-            const verticalFitDistance = (verticalSpan * Math.cos(cameraElevation)) / (2 * halfFovTangent * frameFill);
-            const platformWidth = 5.4;
-            const horizontalFitDistance = platformWidth / (2 * halfFovTangent * aspect * frameFill);
-            const desiredDistance = Math.max(14, verticalFitDistance, horizontalFitDistance);
-            cameraDistance += (desiredDistance - cameraDistance) * (1 - Math.exp(-1.25 * delta));
+            cameraTargetY += (frame.targetY - cameraTargetY) * targetAlpha;
+            cameraDistance += (frame.distance - cameraDistance) * (1 - Math.exp(-1.25 * delta));
 
             const orbit = animationTime * 0.055 + cameraOrbitOffset;
             const horizontalRadius = cameraDistance * Math.cos(cameraElevation);
