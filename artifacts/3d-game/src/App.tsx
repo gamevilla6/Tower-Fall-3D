@@ -22,11 +22,13 @@ type RunSummary = {
 };
 type GraphicsQuality = 'low' | 'medium' | 'high';
 type ControlMode = 'tap' | 'keyboard';
+type CameraDistancePreference = 'close' | 'standard' | 'wide';
 type GameSettings = {
   soundEffects: boolean;
   backgroundMusic: boolean;
   graphicsQuality: GraphicsQuality;
   controlMode: ControlMode;
+  cameraDistance: CameraDistancePreference;
 };
 
 const DEFAULT_SETTINGS: GameSettings = {
@@ -34,6 +36,7 @@ const DEFAULT_SETTINGS: GameSettings = {
   backgroundMusic: false,
   graphicsQuality: 'high',
   controlMode: 'tap',
+  cameraDistance: 'standard',
 };
 
 function readGameSettings(): GameSettings {
@@ -50,6 +53,9 @@ function readGameSettings(): GameSettings {
       controlMode: parsed.controlMode === 'keyboard' || parsed.controlMode === 'tap'
         ? parsed.controlMode
         : DEFAULT_SETTINGS.controlMode,
+      cameraDistance: parsed.cameraDistance === 'close' || parsed.cameraDistance === 'standard' || parsed.cameraDistance === 'wide'
+        ? parsed.cameraDistance
+        : DEFAULT_SETTINGS.cameraDistance,
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -1033,6 +1039,7 @@ function App() {
               aspect: camera.aspect,
               fov: camera.fov,
               cameraElevation,
+              distancePreference: settingsRef.current.cameraDistance,
             });
             const targetAlpha = 1 - Math.exp(-1.8 * delta);
             const cameraAlpha = 1 - Math.exp(-1.55 * delta);
@@ -1619,6 +1626,23 @@ function App() {
                 </label>
               </div>
               <p className="settings-note">Shadows and render scale update now. Anti-aliasing uses this choice after the next page load.</p>
+              <div className="settings-quality-row settings-camera-row">
+                <div><strong>Camera distance</strong><small>Choose a closer or wider view</small></div>
+                <label className="settings-select-wrap">
+                  <select
+                    value={settings.cameraDistance}
+                    onChange={(event) => updateSettings({ cameraDistance: event.target.value as CameraDistancePreference })}
+                    aria-label="Camera distance"
+                    data-testid="select-camera-distance"
+                  >
+                    <option value="close">Closer</option>
+                    <option value="standard">Standard</option>
+                    <option value="wide">Wider</option>
+                  </select>
+                  <span aria-hidden="true">⌄</span>
+                </label>
+              </div>
+              <p className="settings-note">Auto-fit pulls back when needed to keep the tower and active block visible.</p>
             </div>
 
             <div className="settings-section settings-controls-section">

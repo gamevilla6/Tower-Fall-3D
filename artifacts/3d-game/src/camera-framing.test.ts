@@ -48,13 +48,19 @@ function projectedBounds(
   };
 }
 
-function assertSceneFits(settledTowerTop: number, activeBlockTop: number, aspect: number) {
+function assertSceneFits(
+  settledTowerTop: number,
+  activeBlockTop: number,
+  aspect: number,
+  distancePreference: 'close' | 'standard' | 'wide' = 'standard',
+) {
   const frame = calculateCameraFrame({
     settledTowerTop,
     activeBlockTop,
     aspect,
     fov: FOV,
     cameraElevation: ELEVATION,
+    distancePreference,
   });
   const points: Point[] = [];
 
@@ -113,5 +119,25 @@ describe('camera framing', () => {
     const desktop = assertSceneFits(7.5, 10.2, DESKTOP_ASPECT);
     const portrait = assertSceneFits(7.5, 10.2, PORTRAIT_ASPECT);
     assert.ok(portrait.distance > desktop.distance);
+  });
+
+  it('supports closer and wider views when the full scene fits', () => {
+    const closer = assertSceneFits(0.28, 0.28, DESKTOP_ASPECT, 'close');
+    const standard = assertSceneFits(0.28, 0.28, DESKTOP_ASPECT, 'standard');
+    const wider = assertSceneFits(0.28, 0.28, DESKTOP_ASPECT, 'wide');
+
+    assert.ok(closer.distance < standard.distance);
+    assert.ok(wider.distance > standard.distance);
+  });
+
+  it('keeps an active falling block visible with the closer view', () => {
+    assertSceneFits(0.28, 3.5, DESKTOP_ASPECT, 'close');
+  });
+
+  it('automatically pulls a closer preference back to fit a tall tower in portrait', () => {
+    const closer = assertSceneFits(7.5, 10.2, PORTRAIT_ASPECT, 'close');
+    const standard = assertSceneFits(7.5, 10.2, PORTRAIT_ASPECT, 'standard');
+    assert.ok(closer.distance > 11.5);
+    assert.equal(closer.distance, standard.distance);
   });
 });

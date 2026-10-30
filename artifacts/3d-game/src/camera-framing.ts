@@ -4,6 +4,7 @@ export type CameraFrameInput = {
   aspect: number;
   fov: number;
   cameraElevation: number;
+  distancePreference?: 'close' | 'standard' | 'wide';
 };
 
 export type CameraFrame = {
@@ -27,6 +28,7 @@ export function calculateCameraFrame({
   aspect,
   fov,
   cameraElevation,
+  distancePreference = 'standard',
 }: CameraFrameInput): CameraFrame {
   const framedTop = Math.max(activeBlockTop, settledTowerTop + 3.5);
   const trackedTop = Math.max(activeBlockTop, settledTowerTop);
@@ -37,10 +39,12 @@ export function calculateCameraFrame({
   const safeAspect = Math.max(aspect || 1, 0.38);
   const verticalFitDistance = (verticalSpan * Math.cos(cameraElevation)) / (2 * halfFovTangent * frameFill);
   const horizontalFitDistance = 5.4 / (2 * halfFovTangent * safeAspect * frameFill);
+  const safeFitDistance = Math.max(verticalFitDistance, horizontalFitDistance);
+  const preferredDistance = distancePreference === 'close' ? 11.5 : distancePreference === 'wide' ? 17 : 14;
 
   return {
     targetY,
-    distance: Math.max(14, verticalFitDistance, horizontalFitDistance),
+    distance: Math.max(preferredDistance, safeFitDistance),
     framedTop,
   };
 }

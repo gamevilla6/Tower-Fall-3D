@@ -997,6 +997,7 @@
 .settings-section-title { margin-bottom: 8px; color: #86dce7; font-family: 'DM Mono',monospace; font-size: 8px; letter-spacing: .16em; }
 .settings-section-title span { margin-right: 9px; color: #677d87; }
 .settings-row,.settings-quality-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; }
+.settings-camera-row { margin-top: 8px; }
 .settings-row > div,.settings-quality-row > div,.settings-mode-heading { display: flex; flex-direction: column; gap: 4px; }
 .settings-row strong,.settings-quality-row strong,.settings-mode-heading strong { color: #e2ebee; font-size: 12px; font-weight: 500; }
 .settings-row small,.settings-quality-row small,.settings-mode-heading small { color: #86969e; font-size: 10px; }
