@@ -1268,6 +1268,59 @@
   .home-begin-hint { margin-top: 13px; }
   .home-record-note { margin-top: 15px; }
 }
+@media (max-height: 700px) and (max-width: 700px) {
+  .game-header {
+    top: max(10px, env(safe-area-inset-top));
+    right: max(14px, env(safe-area-inset-right));
+    left: max(14px, env(safe-area-inset-left));
+  }
+  .brand-mark { width: 30px; height: 30px; }
+  .brand-lockup { gap: 9px; }
+  .brand-subtitle { display: none; }
+  .pause-button { min-height: 38px; }
+  .hud-rail {
+    top: clamp(58px, 13dvh, 76px);
+    right: 12px;
+    left: 12px;
+    gap: 8px;
+  }
+  .hud { transform: none; }
+  .next-panel { padding: 7px; }
+  .next-preview-stage { height: clamp(44px, 9dvh, 60px); margin: 4px -2px; }
+  .landing-position { margin-top: 6px; }
+  .position-meter { height: 10px; margin-top: 3px; }
+  .preview-controls button { min-height: 30px; }
+  .game-bottom {
+    right: max(14px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    left: max(14px, env(safe-area-inset-left));
+    gap: 8px;
+  }
+  .drop-prompt { gap: 8px; font-size: 12px; }
+  .keycap { min-width: 30px; height: 30px; }
+  .restart-button { min-height: 44px; padding: 0 11px; }
+}
+@media (max-height: 460px) and (max-width: 900px) {
+  .game-header { top: max(6px, env(safe-area-inset-top)); }
+  .brand-mark { width: 27px; height: 27px; }
+  .pause-button { min-height: 36px; }
+  .session-badge { padding: 6px 8px; }
+  .hud-rail { top: 52px; }
+  .hud { width: min(100px, calc(100% - 128px)); }
+  .score-value { margin: 2px 0 4px; font-size: 30px; }
+  .bonus-readout, .challenge-warning, .wind-warning, .best-height { display: none; }
+  .next-panel { flex-basis: 104px; width: 104px; padding: 6px; }
+  .next-title { font-size: 11px; }
+  .next-preview-stage { height: 38px; margin: 3px -2px; }
+  .landing-position { margin-top: 3px; }
+  .position-meter { height: 8px; margin-top: 2px; }
+  .preview-controls { margin-top: 1px; }
+  .preview-controls button { height: 25px; min-height: 25px; }
+  .game-bottom { bottom: max(6px, env(safe-area-inset-bottom)); }
+  .drop-prompt { font-size: 11px; }
+  .keycap { height: 28px; }
+  .restart-button { min-height: 40px; padding: 0 9px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }

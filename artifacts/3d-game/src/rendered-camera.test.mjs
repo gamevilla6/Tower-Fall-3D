@@ -126,6 +126,54 @@ async function startRun(page) {
   await page.getByTestId('status-main-menu').waitFor({ state: 'hidden' });
 }
 
+async function assertPhoneControlsFit(page, label) {
+  const layout = await page.evaluate(() => {
+    const bounds = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+        visible: style.visibility !== 'hidden' && style.display !== 'none',
+      };
+    };
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      pause: bounds('[data-testid="button-pause"]'),
+      restart: bounds('[data-testid="button-restart"]'),
+      dropPrompt: bounds('.drop-prompt'),
+      canvas: bounds('.game-canvas-wrap'),
+    };
+  });
+
+  for (const [name, rect] of Object.entries({
+    pause: layout.pause,
+    restart: layout.restart,
+    dropPrompt: layout.dropPrompt,
+  })) {
+    assert.ok(rect?.visible, `${label}: ${name} control is not visible`);
+    assert.ok(
+      rect.left >= 0 && rect.top >= 0 &&
+        rect.right <= layout.viewport.width && rect.bottom <= layout.viewport.height,
+      `${label}: ${name} control extends beyond the viewport (${JSON.stringify(rect)})`,
+    );
+  }
+
+  assert.ok(layout.pause.height >= 36, `${label}: pause control is too small to tap`);
+  assert.ok(layout.restart.height >= 40, `${label}: restart control is too small to tap`);
+  assert.ok(
+    layout.canvas.width >= layout.viewport.width * 0.95 &&
+      layout.canvas.height >= layout.viewport.height * 0.95,
+    `${label}: game area does not fill the phone viewport (${JSON.stringify(layout.canvas)})`,
+  );
+}
+
 async function placeBlocks(page, count) {
   const canvas = page.getByTestId('game-fallback-canvas');
   for (let score = 1; score <= count; score += 1) {
@@ -221,4 +269,20 @@ describe('rendered camera framing', () => {
       }
     });
   }
+
+  it('keeps gameplay controls visible on short portrait and landscape phones', async () => {
+    for (const viewport of [
+      { name: 'short portrait', width: 360, height: 640 },
+      { name: 'phone landscape', width: 844, height: 390 },
+    ]) {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+      const page = await context.newPage();
+      try {
+        await startRun(page);
+        await assertPhoneControlsFit(page, viewport.name);
+      } finally {
+        await context.close();
+      }
+    }
+  });
 });
